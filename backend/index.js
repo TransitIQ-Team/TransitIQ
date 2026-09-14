@@ -7,7 +7,11 @@ import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, f
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 // Express JSON body parser MUST come first for Traccar JSON payloads
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -317,6 +321,86 @@ app.post('/api/trips/:id/end', (req, res) => {
   });
 });
 
+// POST /api/traccar/webhook
+app.post('/api/traccar/webhook', (req, res) => {
+  const body = req.body || {};
+  const position = body.position || body;
+  const device = body.device || {};
+
+  const deviceId = body.deviceId || device.id || position.deviceId || body.id || 'TRIP-101';
+  const trip_id = typeof deviceId === 'string' && deviceId.startsWith('TRIP-') ? deviceId : 'TRIP-101';
+
+  const latitude = typeof position.latitude === 'number'
+    ? position.latitude
+    : (typeof body.latitude === 'number' ? body.latitude : parseFloat(position.lat || body.lat));
+  const longitude = typeof position.longitude === 'number'
+    ? position.longitude
+    : (typeof body.longitude === 'number' ? body.longitude : parseFloat(position.lon || body.lon || position.lng || body.lng));
+  const speed = typeof position.speed === 'number'
+    ? position.speed
+    : (typeof body.speed === 'number' ? body.speed : 0);
+  const fixTime = position.fixTime || position.deviceTime || body.fixTime || body.deviceTime || new Date().toISOString();
+
+  if (isNaN(latitude) || isNaN(longitude)) {
+    return res.status(400).json({ success: false, message: 'Invalid or missing latitude/longitude coordinates.' });
+  }
+
+  const existingTrip = activeTripsStore.get(trip_id);
+  const direction = existingTrip?.direction || 'SEHORE_TO_VIT';
+  const serverReceivedAt = Date.now();
+
+  const updatedTripData = {
+    trip_id,
+    latitude,
+    longitude,
+    accuracy: typeof position.accuracy === 'number' ? position.accuracy : 5,
+    speed,
+    direction,
+    timestamp: new Date(fixTime).toISOString(),
+    source: 'traccar',
+    serverReceivedAt
+  };
+
+  activeTripsStore.set(trip_id, updatedTripData);
+
+  const signalStatus = evaluateSignalStatus(updatedTripData, serverReceivedAt);
+  const activeWaypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
+  const destination = activeWaypoints[activeWaypoints.length - 1];
+
+  getOSRMRoute({ lat: latitude, lng: longitude }, destination).then((osrmData) => {
+    const distanceKm = osrmData && osrmData.distanceMeters 
+      ? parseFloat((osrmData.distanceMeters / 1000).toFixed(1)) 
+      : null;
+
+    const routeCoordinates = osrmData?.routeCoordinates || (
+      osrmData?.geometry?.coordinates
+        ? osrmData.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+        : []
+    );
+
+    const updatedPayload = {
+      ...updatedTripData,
+      coordinates: [latitude, longitude],
+      direction,
+      osrmGeometry: osrmData ? osrmData.geometry : null,
+      routeCoordinates,
+      osrmDurationMinutes: osrmData ? osrmData.durationMinutes : null,
+      osrmDistanceKm: distanceKm
+    };
+
+    io.to(`trip:${trip_id}`).emit('trip:location-updated', updatedPayload);
+    io.emit('trip:location-updated', updatedPayload);
+  });
+
+  io.to(`trip:${trip_id}`).emit('trip:signal-status-updated', signalStatus);
+  io.emit('trip:signal-status-updated', signalStatus);
+
+  return res.status(200).json({
+    success: true,
+    message: 'Traccar ping processed'
+  });
+});
+
 // Socket.IO Subscription & Connection Handling
 io.on('connection', (socket) => {
   console.log(`[Socket.IO] Client connected: ${socket.id}`);
@@ -389,8 +473,8 @@ app.all(['/api/ingest', '/'], (req, res) => {
 });
 
 
-if (process.argv[1] && (process.argv[1].endsWith('index.js') || process.argv[1].endsWith('index'))) {
+if (!process.env.NODE_ENV || process.argv[1]?.endsWith('index.js') || process.argv[1]?.endsWith('index')) {
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`[TransitIQ Backend] Running on http://localhost:${PORT}`);
+    console.log(`[TransitIQ Backend] Listening on port ${PORT}`);
   });
 }
