@@ -268,10 +268,18 @@ app.post('/api/trips/:id/location', (req, res) => {
       ? parseFloat((osrmData.distanceMeters / 1000).toFixed(1)) 
       : null;
 
+    const routeCoordinates = osrmData?.routeCoordinates || (
+      osrmData?.geometry?.coordinates
+        ? osrmData.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+        : []
+    );
+
     const updatedPayload = {
       ...updatedTripData,
+      coordinates: [latitude, longitude],
       direction: updatedTripData.direction,
       osrmGeometry: osrmData ? osrmData.geometry : null,
+      routeCoordinates,
       osrmDurationMinutes: osrmData ? osrmData.durationMinutes : null,
       osrmDistanceKm: distanceKm
     };
@@ -320,10 +328,12 @@ io.on('connection', (socket) => {
 
       if (activeTripsStore.has(trip_id)) {
         const stored = activeTripsStore.get(trip_id);
+        const coordinates = [stored.latitude, stored.longitude];
         socket.emit('trip:location-updated', {
           trip_id: stored.trip_id,
           latitude: stored.latitude,
           longitude: stored.longitude,
+          coordinates,
           accuracy: stored.accuracy,
           timestamp: stored.timestamp,
           source: stored.source
@@ -334,7 +344,12 @@ io.on('connection', (socket) => {
       const defaultWaypoints = PILOT_WAYPOINTS.SEHORE_TO_VIT;
       getOSRMRoute(defaultWaypoints[0], defaultWaypoints[defaultWaypoints.length - 1]).then((osrmData) => {
         if (osrmData) {
-          socket.emit('route:geometry-loaded', { geometry: osrmData.geometry });
+          const routeCoordinates = osrmData.routeCoordinates || (
+            osrmData.geometry?.coordinates
+              ? osrmData.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+              : []
+          );
+          socket.emit('route:geometry-loaded', { geometry: osrmData.geometry, routeCoordinates });
         }
       });
     }

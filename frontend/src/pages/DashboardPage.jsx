@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { io } from 'socket.io-client';
 import { Bus, MapPin, Search, ArrowRightLeft, Clock, Wifi, SignalLow, SignalZero, CheckCircle2 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -12,13 +13,71 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-export default function DashboardPage() {
+export default function DashboardPage({ latestEvent }) {
   const [fromLoc, setFromLoc] = useState("Sehore Bus Stand");
   const [toLoc, setToLoc] = useState("VIT Bhopal Outer Highway");
   const [direction, setDirection] = useState("SEHORE_TO_VIT");
   const [targetStop, setTargetStop] = useState("VIT Bhopal Outer Highway");
   const [etaData, setEtaData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [socketTripCoords, setSocketTripCoords] = useState(null);
+  const [socketRouteCoords, setSocketRouteCoords] = useState([]);
+
+  useEffect(() => {
+    const socket = io('http://localhost:5000', {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 5,
+      timeout: 3000
+    });
+
+    socket.on('connect', () => {
+      socket.emit('passenger:subscribe-trip', { trip_id: 'TRIP-101' });
+    });
+
+    socket.on('trip:location-updated', (data) => {
+      const tripCoordinates = (data?.latitude != null && data?.longitude != null)
+        ? [data.latitude, data.longitude]
+        : null;
+
+      const rawGeometry = data?.osrmGeometry || data?.geometry || data?.routeCoordinates;
+      let routeCoordinates = [];
+      if (rawGeometry?.coordinates && Array.isArray(rawGeometry.coordinates)) {
+        routeCoordinates = rawGeometry.coordinates.map(([lng, lat]) => [lat, lng]);
+      } else if (Array.isArray(rawGeometry)) {
+        routeCoordinates = rawGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[1], pt[0]] : pt) : [pt.lat, pt.lng]);
+      }
+
+      console.log("Received Map Data:", { tripCoordinates, routeCoordinates });
+
+      if (tripCoordinates) setSocketTripCoords(tripCoordinates);
+      if (routeCoordinates.length > 0) setSocketRouteCoords(routeCoordinates);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!latestEvent) return;
+
+    const tripCoordinates = (latestEvent?.latitude != null && latestEvent?.longitude != null)
+      ? [latestEvent.latitude, latestEvent.longitude]
+      : null;
+
+    const rawGeometry = latestEvent?.osrmGeometry || latestEvent?.geometry || latestEvent?.routeCoordinates;
+    let routeCoordinates = [];
+    if (rawGeometry?.coordinates && Array.isArray(rawGeometry.coordinates)) {
+      routeCoordinates = rawGeometry.coordinates.map(([lng, lat]) => [lat, lng]);
+    } else if (Array.isArray(rawGeometry)) {
+      routeCoordinates = rawGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[1], pt[0]] : pt) : [pt.lat, pt.lng]);
+    }
+
+    console.log("Received Map Data:", { tripCoordinates, routeCoordinates });
+
+    if (tripCoordinates) setSocketTripCoords(tripCoordinates);
+    if (routeCoordinates.length > 0) setSocketRouteCoords(routeCoordinates);
+  }, [latestEvent]);
 
   const fetchLiveEta = async () => {
     try {
@@ -87,13 +146,17 @@ export default function DashboardPage() {
   const badge = getSignalBadge(etaData ? etaData.data_state : 'NO_DATA');
   const BadgeIcon = badge.icon;
   const tripData = etaData?.tripData || etaData?.trip || etaData;
-  const tripCoordinates = tripData?.latitude != null && tripData?.longitude != null
+  const fallbackTripCoords = (tripData?.latitude != null && tripData?.longitude != null)
     ? [tripData.latitude, tripData.longitude]
     : null;
-  const routeGeometry = etaData?.route_geometry || etaData?.osrm_route?.geometry || etaData?.route?.geometry;
-  const routeCoordinates = Array.isArray(routeGeometry)
-    ? routeGeometry.map(([longitude, latitude]) => [latitude, longitude])
-    : routeGeometry?.coordinates?.map(([longitude, latitude]) => [latitude, longitude]);
+  const tripCoordinates = socketTripCoords || fallbackTripCoords;
+
+  const rawEtaGeometry = etaData?.geometry || etaData?.osrm_route?.geometry || etaData?.route_geometry || etaData?.routeCoordinates;
+  const fallbackRouteCoords = rawEtaGeometry?.coordinates
+    ? rawEtaGeometry.coordinates.map(([lng, lat]) => [lat, lng])
+    : (Array.isArray(rawEtaGeometry) ? rawEtaGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[1], pt[0]] : pt) : [pt.lat, pt.lng]) : []);
+
+  const routeCoordinates = socketRouteCoords.length > 0 ? socketRouteCoords : fallbackRouteCoords;
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto py-6">
@@ -260,25 +323,34 @@ export default function DashboardPage() {
       </div>
 
       {/* 3. Route Map */}
-      <div className="h-[380px] overflow-hidden rounded-3xl border border-slate-200 shadow-sm">
-        <MapContainer
-          center={[23.1404, 76.9678]}
-          zoom={11}
-          style={{ height: '380px', width: '100%' }}
+      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-2 mb-4 text-slate-800">
+          <Bus className="w-5 h-5 text-teal-600" />
+          <h2 className="font-bold">Pilot Corridor: Sehore Bus Stand ↔ VIT Bhopal</h2>
+        </div>
+        <div
+          className="relative z-0 overflow-hidden rounded-2xl"
+          style={{ height: '360px', width: '100%' }}
         >
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution="&copy; OpenStreetMap contributors"
-          />
-          {routeCoordinates?.length > 0 && (
-            <Polyline positions={routeCoordinates} color="#0d9488" weight={5} />
-          )}
-          {tripCoordinates && (
-            <Marker position={tripCoordinates}>
-              <Popup>Current bus location</Popup>
-            </Marker>
-          )}
-        </MapContainer>
+          <MapContainer
+            center={[23.1404, 76.9678]}
+            zoom={11}
+            style={{ height: '100%', width: '100%' }}
+          >
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution="&copy; OpenStreetMap contributors"
+            />
+            {Array.isArray(routeCoordinates) && routeCoordinates.length > 0 && (
+              <Polyline positions={routeCoordinates} color="#0d9488" weight={5} />
+            )}
+            {Array.isArray(tripCoordinates) && (
+              <Marker position={tripCoordinates}>
+                <Popup>Current bus location</Popup>
+              </Marker>
+            )}
+          </MapContainer>
+        </div>
       </div>
     </div>
   );

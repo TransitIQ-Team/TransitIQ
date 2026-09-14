@@ -48,11 +48,16 @@ export async function getOSRMRoute(start, end, direction = 'SEHORE_TO_VIT') {
     const response = await axios.get(url);
     if (response.data && response.data.routes && response.data.routes.length > 0) {
       const route = response.data.routes[0];
+      const routeCoordinates = route.geometry?.coordinates
+        ? route.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+        : [];
+
       return {
         durationSeconds: route.duration,
         durationMinutes: Math.round(route.duration / 60),
         distanceMeters: route.distance,
-        geometry: route.geometry // GeoJSON route line for map rendering
+        geometry: route.geometry, // GeoJSON route line for map rendering
+        routeCoordinates
       };
     }
   } catch (error) {
