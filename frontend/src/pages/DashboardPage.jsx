@@ -5,6 +5,8 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
+const API_URL = process.env.REACT_APP_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+
 // Fix for default marker icons broken by Webpack/Vite bundlers
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -24,7 +26,7 @@ export default function DashboardPage({ latestEvent }) {
   const [socketRouteCoords, setSocketRouteCoords] = useState([]);
 
   useEffect(() => {
-    const socket = io(process.env.REACT_APP_SOCKET_URL || process.env.REACT_APP_API_URL || 'http://localhost:5000', {
+    const socket = io(API_URL, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       timeout: 3000
@@ -82,7 +84,7 @@ export default function DashboardPage({ latestEvent }) {
   const fetchLiveEta = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${process.env.REACT_APP_API_URL}/api/trips/TRIP-101/eta?mode=hybrid&direction=${direction}&targetStop=${encodeURIComponent(targetStop)}`);
+      const res = await fetch(`${API_URL}/api/trips/TRIP-101/eta?mode=hybrid&direction=${direction}&targetStop=${encodeURIComponent(targetStop)}`);
       if (res.ok) {
         const data = await res.json();
         setEtaData(data);
