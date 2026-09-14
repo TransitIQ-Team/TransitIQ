@@ -24,7 +24,7 @@ export default function DashboardPage({ latestEvent }) {
   const [socketRouteCoords, setSocketRouteCoords] = useState([]);
 
   useEffect(() => {
-    const socket = io('http://localhost:5000', {
+    const socket = io(process.env.REACT_APP_SOCKET_URL || process.env.REACT_APP_API_URL || 'http://localhost:5000', {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       timeout: 3000
@@ -82,7 +82,7 @@ export default function DashboardPage({ latestEvent }) {
   const fetchLiveEta = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`http://localhost:5000/api/trips/TRIP-101/eta?mode=hybrid&direction=${direction}&targetStop=${encodeURIComponent(targetStop)}`);
+      const res = await fetch(`${process.env.REACT_APP_API_URL}/api/trips/TRIP-101/eta?mode=hybrid&direction=${direction}&targetStop=${encodeURIComponent(targetStop)}`);
       if (res.ok) {
         const data = await res.json();
         setEtaData(data);

@@ -13,10 +13,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [socketConnected, setSocketConnected] = useState(false);
   const [latestEvent, setLatestEvent] = useState(null);
+  const socketUrl = process.env.REACT_APP_SOCKET_URL || process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
   useEffect(() => {
     // Socket.IO passenger connection listener
-    const socket = io('http://localhost:5000', {
+    const socket = io(socketUrl, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       timeout: 3000
