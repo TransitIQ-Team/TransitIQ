@@ -1,10 +1,24 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import axios from 'axios';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_FILE_PATH = path.join(__dirname, 'data', 'historicalTrips.json');
+
+const TERMINAL_COORDINATES = {
+  SEHORE: { lat: 23.2032, lng: 77.0844 },
+  VIT: { lat: 23.0776, lng: 76.8513 }
+};
+
+export function getDestinationCoords(direction) {
+  return direction === 'VIT_TO_SEHORE'
+    ? TERMINAL_COORDINATES.SEHORE
+    : TERMINAL_COORDINATES.VIT;
+}
+
+
 
 // Waypoint definitions for pilot routes
 export const PILOT_WAYPOINTS = {
@@ -24,6 +38,28 @@ export const PILOT_WAYPOINTS = {
     { name: "Sehore Bus Stand", lat: 23.200078, lng: 77.087906 }
   ]
 };
+
+// Fetch real-time dynamic route geometry and driving duration from OSRM
+export async function getOSRMRoute(start, end, direction = 'SEHORE_TO_VIT') {
+  const destination = end || getDestinationCoords(direction);
+  const url = `http://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+
+  try {
+    const response = await axios.get(url);
+    if (response.data && response.data.routes && response.data.routes.length > 0) {
+      const route = response.data.routes[0];
+      return {
+        durationSeconds: route.duration,
+        durationMinutes: Math.round(route.duration / 60),
+        distanceMeters: route.distance,
+        geometry: route.geometry // GeoJSON route line for map rendering
+      };
+    }
+  } catch (error) {
+    console.error("OSRM API Error, falling back to static/historical calculation:", error.message);
+  }
+  return null;
+}
 
 // Load historical trip records from structured repository file
 export function getHistoricalRecords() {

@@ -1,6 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Bus, MapPin, Search, ArrowRightLeft, Clock, Wifi, SignalLow, SignalZero, CheckCircle2 } from 'lucide-react';
-import CorridorVisualizer from '../components/CorridorVisualizer';
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// Fix for default marker icons broken by Webpack/Vite bundlers
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
 
 export default function DashboardPage() {
   const [fromLoc, setFromLoc] = useState("Sehore Bus Stand");
@@ -76,6 +86,14 @@ export default function DashboardPage() {
 
   const badge = getSignalBadge(etaData ? etaData.data_state : 'NO_DATA');
   const BadgeIcon = badge.icon;
+  const tripData = etaData?.tripData || etaData?.trip || etaData;
+  const tripCoordinates = tripData?.latitude != null && tripData?.longitude != null
+    ? [tripData.latitude, tripData.longitude]
+    : null;
+  const routeGeometry = etaData?.route_geometry || etaData?.osrm_route?.geometry || etaData?.route?.geometry;
+  const routeCoordinates = Array.isArray(routeGeometry)
+    ? routeGeometry.map(([longitude, latitude]) => [latitude, longitude])
+    : routeGeometry?.coordinates?.map(([longitude, latitude]) => [latitude, longitude]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto py-6">
@@ -241,8 +259,27 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 3. Simple Route Map / Visualizer */}
-      <CorridorVisualizer direction={direction} />
+      {/* 3. Route Map */}
+      <div className="h-[380px] overflow-hidden rounded-3xl border border-slate-200 shadow-sm">
+        <MapContainer
+          center={[23.1404, 76.9678]}
+          zoom={11}
+          style={{ height: '380px', width: '100%' }}
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution="&copy; OpenStreetMap contributors"
+          />
+          {routeCoordinates?.length > 0 && (
+            <Polyline positions={routeCoordinates} color="#0d9488" weight={5} />
+          )}
+          {tripCoordinates && (
+            <Marker position={tripCoordinates}>
+              <Popup>Current bus location</Popup>
+            </Marker>
+          )}
+        </MapContainer>
+      </div>
     </div>
   );
 }

@@ -2,13 +2,15 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics } from './etaService.js';
+import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics, getOSRMRoute, PILOT_WAYPOINTS } from './etaService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
+// Express JSON body parser MUST come first for Traccar JSON payloads
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -110,11 +112,11 @@ app.get('/api/routes/:id/eta', (req, res) => {
   const route_id = req.params.id;
   const { trip_id, direction, target_stop } = req.query;
 
-  const targetTripId = trip_id || 'TRIP-101';
+  const targetTripId = trip_id || 'TRIP-101';ī
   const targetDirection = direction || 'SEHORE_TO_VIT';
   const targetStopName = target_stop || 'VIT Bhopal Outer Highway';
 
-  const storedTrip = activeTripsStore.get(targetTripId);
+  const sīoredTrip = activeTripsStore.get(targetTripId);
   const signalStatus = evaluateSignalStatus(storedTrip);
 
   const etaResponse = computeSignalAwareEta({
@@ -187,11 +189,39 @@ app.get('/api/research/missing-data', (req, res) => {
   return res.status(503).json({ error: 'Missing data experiment results not found or unavailable' });
 });
 
+// GET /api/route-geometry (Fetches OSRM dynamic road coordinates)
+app.get('/api/route-geometry', async (req, res) => {
+  const direction = req.query.direction || 'SEHORE_TO_VIT';
+  const waypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
 
-// POST /api/trips/:id/location
+  const start = waypoints[0];
+  const end = waypoints[waypoints.length - 1];
+
+  const osrmData = await getOSRMRoute(start, end);
+
+  if (osrmData) {
+    return res.status(200).json({
+      success: true,
+      geometry: osrmData.geometry,
+      distanceMeters: osrmData.distanceMeters,
+      durationMinutes: osrmData.durationMinutes
+    });
+  }
+
+  return res.status(500).json({ 
+    success: false, 
+    message: 'Could not fetch route geometry from OSRM' 
+  });
+});
+
+
+// Replace your existing app.post('/api/trips/:id/location'...) with this:
+
 app.post('/api/trips/:id/location', (req, res) => {
   const trip_id = req.params.id;
-  const { latitude, longitude, accuracy, timestamp, source } = req.body;
+  // 1. Extract direction from body (defaults to 'SEHORE_TO_VIT')
+  const { latitude, longitude, accuracy, timestamp, source, direction: bodyDirection } = req.body;
+  const direction = bodyDirection === undefined ? 'SEHORE_TO_VIT' : bodyDirection;
   const serverReceivedAt = Date.now();
 
   if (typeof latitude !== 'number' || typeof longitude !== 'number') {
@@ -212,36 +242,50 @@ app.post('/api/trips/:id/location', (req, res) => {
 
   const normalizedTimestamp = new Date(timestamp).toISOString();
 
-  const locationData = {
+  // 2. Store direction alongside location data
+  const updatedTripData = {
     trip_id,
     latitude,
     longitude,
     accuracy,
+    direction,
     timestamp: normalizedTimestamp,
     source,
     serverReceivedAt
   };
 
-  activeTripsStore.set(trip_id, locationData);
+  activeTripsStore.set(trip_id, updatedTripData);
 
-  const signalStatus = evaluateSignalStatus(locationData, serverReceivedAt);
+  const signalStatus = evaluateSignalStatus(updatedTripData, serverReceivedAt);
 
-  io.to(`trip:${trip_id}`).emit('trip:location-updated', locationData);
-  io.emit('trip:location-updated', locationData);
+  // 3. Dynamically resolve destination based on active direction
+  const activeWaypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
+  const destination = activeWaypoints[activeWaypoints.length - 1];
+
+  // 4. Calculate OSRM route from dynamic bus position to target terminal
+  getOSRMRoute({ lat: latitude, lng: longitude }, destination).then((osrmData) => {
+    const distanceKm = osrmData && osrmData.distanceMeters 
+      ? parseFloat((osrmData.distanceMeters / 1000).toFixed(1)) 
+      : null;
+
+    const updatedPayload = {
+      ...updatedTripData,
+      direction: updatedTripData.direction,
+      osrmGeometry: osrmData ? osrmData.geometry : null,
+      osrmDurationMinutes: osrmData ? osrmData.durationMinutes : null,
+      osrmDistanceKm: distanceKm
+    };
+
+    io.to(`trip:${trip_id}`).emit('trip:location-updated', updatedPayload);
+    io.emit('trip:location-updated', updatedPayload);
+  });
 
   io.to(`trip:${trip_id}`).emit('trip:signal-status-updated', signalStatus);
   io.emit('trip:signal-status-updated', signalStatus);
 
   return res.status(200).json({
     message: 'Location update processed successfully.',
-    storedLocation: {
-      trip_id,
-      latitude,
-      longitude,
-      accuracy,
-      timestamp: normalizedTimestamp,
-      source
-    },
+    storedLocation: updatedTripData,
     signalStatus
   });
 });
@@ -286,6 +330,13 @@ io.on('connection', (socket) => {
         });
         socket.emit('trip:signal-status-updated', evaluateSignalStatus(stored));
       }
+      //send baseline route geometry to newly connected map
+      const defaultWaypoints = PILOT_WAYPOINTS.SEHORE_TO_VIT;
+      getOSRMRoute(defaultWaypoints[0], defaultWaypoints[defaultWaypoints.length - 1]).then((osrmData) => {
+        if (osrmData) {
+          socket.emit('route:geometry-loaded', { geometry: osrmData.geometry });
+        }
+      });
     }
   });
 
@@ -294,9 +345,37 @@ io.on('connection', (socket) => {
   });
 });
 
+app.all(['/api/ingest', '/'], (req, res) => {
+  // Grab query params or fallback to body
+  const raw = Object.keys(req.query).length ? req.query : req.body;
+  
+  if (raw && (raw.lat || raw.latitude)) {
+    const locationData = {
+      trip_id: raw.id || raw.deviceId || 'TRIP-101',
+      latitude: parseFloat(raw.lat || raw.latitude),
+      longitude: parseFloat(raw.lon || raw.longitude),
+      accuracy: parseFloat(raw.accuracy || 10),
+      timestamp: new Date().toISOString(),
+      source: 'conductor',
+      serverReceivedAt: Date.now()
+    };
+
+    // Store in active trips map
+    activeTripsStore.set(locationData.trip_id, locationData);
+
+    // Broadcast live update over Socket.IO to React Map
+    io.emit('trip:location-updated', locationData);
+    console.log('🚌 Live GPS Processed & Broadcasted:', locationData);
+  } else {
+    console.log('📡 Ingest ping received (no coordinates attached yet)');
+  }
+
+  res.status(200).send('OK');
+});
+
+
 if (process.argv[1] && (process.argv[1].endsWith('index.js') || process.argv[1].endsWith('index'))) {
-  httpServer.listen(PORT, () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[TransitIQ Backend] Running on http://localhost:${PORT}`);
   });
 }
-

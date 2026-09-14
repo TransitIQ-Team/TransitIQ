@@ -39,27 +39,27 @@ export default function App() {
       socket.disconnect();
     };
   }, []);
-
-  const renderActivePage = () => {
-    switch (activeTab) {
-      case 'home':
-        return <HomePage setActiveTab={setActiveTab} />;
-      case 'dashboard':
-        return <DashboardPage />;
-      case 'conductor':
-        return <ConductorPage />;
-      case 'simulator':
-        return <SimulatorPage />;
-      case 'insights':
-        return <InsightsPage />;
-      case 'routes':
-        return <RouteComparisonPage />;
-      case 'about':
-        return <AboutPage />;
-      default:
-        return <HomePage setActiveTab={setActiveTab} />;
-    }
-  };
+  
+const renderActivePage = () => {
+  switch (activeTab) {
+    case 'home':
+      return <HomePage setActiveTab={setActiveTab} latestEvent={latestEvent} />;
+    case 'dashboard':
+      return <DashboardPage latestEvent={latestEvent} />;
+    case 'conductor':
+      return <ConductorPage />;
+    case 'simulator':
+      return <SimulatorPage />;
+    case 'insights':
+      return <InsightsPage />;
+    case 'routes':
+      return <RouteComparisonPage />;
+    case 'about':
+      return <AboutPage />;
+    default:
+      return <HomePage setActiveTab={setActiveTab} latestEvent={latestEvent} />;
+  }
+};
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-teal-500 selection:text-white">

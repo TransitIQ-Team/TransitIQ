@@ -3,6 +3,7 @@ import { Navigation, Play, Square, AlertTriangle } from 'lucide-react';
 
 export default function ConductorPage() {
   const [tripId, setTripId] = useState('TRIP-101');
+  const [direction, setDirection] = useState('SEHORE_TO_VIT');
   const [status, setStatus] = useState('Not Started'); // 'Not Started' | 'Tracking' | 'Ended'
   const [latestGps, setLatestGps] = useState(null);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -41,7 +42,8 @@ export default function ConductorPage() {
           longitude,
           accuracy: accuracy || 10,
           timestamp,
-          source: 'conductor'
+          source: 'conductor',
+          direction
         };
 
         setLatestGps(payload);
@@ -123,14 +125,17 @@ export default function ConductorPage() {
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">
-              Active Route
+              Active Route & Direction
             </label>
-            <input
-              type="text"
-              readOnly
-              value="Sehore Bus Stand ↔ VIT Bhopal"
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-xs font-semibold"
-            />
+            <select
+              value={direction}
+              disabled={status === 'Tracking'}
+              onChange={(e) => setDirection(e.target.value)}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-60"
+            >
+              <option value="SEHORE_TO_VIT">Sehore → Kubreshwar → VIT Bhopal</option>
+              <option value="VIT_TO_SEHORE">VIT Bhopal → Amlaha → Sehore</option>
+            </select>
           </div>
 
           <div>
