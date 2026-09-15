@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layers } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
-
 export default function ModelComparisonCard() {
   const [metrics, setMetrics] = useState({
     historical_baseline: { mae: 0.88, rmse: 1.17 },
@@ -12,7 +10,7 @@ export default function ModelComparisonCard() {
   });
 
   useEffect(() => {
-    fetch(`${API_URL}/api/metrics`)
+    fetch('http://localhost:5000/api/metrics')
       .then(res => res.json())
       .then(data => {
         if (data && data.historical_baseline) {
