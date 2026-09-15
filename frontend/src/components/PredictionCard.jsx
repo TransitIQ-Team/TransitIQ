@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, HelpCircle, Activity } from 'lucide-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+
 export default function PredictionCard({ missingLevel }) {
   const [levelData, setLevelData] = useState(null);
 
   useEffect(() => {
-    fetch('http://localhost:5000/api/research/missing-data')
+    fetch(`${API_URL}/api/research/missing-data`)
       .then(res => res.json())
       .then(data => {
         if (data && data.levels && data.levels[missingLevel]) {
