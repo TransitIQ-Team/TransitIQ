@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Cpu, Play, Pause, Square, AlertCircle } from 'lucide-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+
 const ROUTE_SEHORE_TO_VIT = [
   { name: "Sehore Bus Stand", lat: 23.200078, lng: 77.087906 },
   { name: "Kubreshwar Dham", lat: 23.164298, lng: 77.005836 },
@@ -84,7 +86,7 @@ const sendPing = async () => {
   setPingCount((prev) => prev + 1);
 
   try {
-    const res = await fetch(`http://localhost:5000/api/trips/${tripId}/location`, {
+    const res = await fetch(`${API_URL}/api/trips/${tripId}/location`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -97,7 +99,7 @@ const sendPing = async () => {
       setErrorMsg(null);
     }
   } catch (err) {
-    setErrorMsg('Backend Connection Failed: Ensure local backend server is running on port 5000.');
+    setErrorMsg('Backend Connection Failed: Ensure backend server is running.');
   }
 
   stepRef.current += 1;
@@ -134,7 +136,7 @@ const sendPing = async () => {
     setSimState('ENDED');
 
     try {
-      await fetch(`http://localhost:5000/api/trips/${tripId}/end`, {
+      await fetch(`${API_URL}/api/trips/${tripId}/end`, {
         method: 'POST'
       });
     } catch (err) {

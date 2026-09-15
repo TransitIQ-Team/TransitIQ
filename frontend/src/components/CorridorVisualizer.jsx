@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Route, Navigation, Clock, MapPin, CheckCircle2 } from 'lucide-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+
 const WAYPOINTS = {
   SEHORE_TO_VIT: [
     "Sehore Bus Stand",
@@ -27,7 +29,7 @@ export default function CorridorVisualizer({ direction, liveDistance, liveEta })
   // Fetch dynamic OSRM route metrics from backend API
   useEffect(() => {
     let isMounted = true;
-    fetch(`http://localhost:5000/api/route-geometry?direction=${direction}`)
+    fetch(`${API_URL}/api/route-geometry?direction=${direction}`)
       .then((res) => res.json())
       .then((data) => {
         if (isMounted && data.success) {

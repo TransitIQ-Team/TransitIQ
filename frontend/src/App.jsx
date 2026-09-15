@@ -9,15 +9,16 @@ import AboutPage from './pages/AboutPage';
 import ConductorPage from './pages/ConductorPage';
 import SimulatorPage from './pages/SimulatorPage';
 
-const BACKEND_URL = process.env.REACT_APP_SOCKET_URL || process.env.REACT_APP_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [socketConnected, setSocketConnected] = useState(false);
   const [latestEvent, setLatestEvent] = useState(null);
+
   useEffect(() => {
     // Socket.IO passenger connection listener
-    const socket = io(BACKEND_URL, {
+    const socket = io(API_URL, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       timeout: 3000

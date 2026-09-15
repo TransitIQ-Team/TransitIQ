@@ -5,7 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-const API_URL = process.env.REACT_APP_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
 
 // Fix for default marker icons broken by Webpack/Vite bundlers
 delete L.Icon.Default.prototype._getIconUrl;
@@ -159,6 +159,59 @@ export default function DashboardPage({ latestEvent }) {
     : (Array.isArray(rawEtaGeometry) ? rawEtaGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[1], pt[0]] : pt) : [pt.lat, pt.lng]) : []);
 
   const routeCoordinates = socketRouteCoords.length > 0 ? socketRouteCoords : fallbackRouteCoords;
+
+  const [animatedTripCoords, setAnimatedTripCoords] = useState(null);
+  const animFrameRef = React.useRef(null);
+  const currentCoordsRef = React.useRef(null);
+
+  // Smooth linear interpolation (LERP) whenever tripCoordinates target changes
+  useEffect(() => {
+    if (!tripCoordinates) {
+      setAnimatedTripCoords(null);
+      currentCoordsRef.current = null;
+      return;
+    }
+
+    if (!currentCoordsRef.current) {
+      currentCoordsRef.current = tripCoordinates;
+      setAnimatedTripCoords(tripCoordinates);
+      return;
+    }
+
+    const startLat = currentCoordsRef.current[0];
+    const startLng = currentCoordsRef.current[1];
+    const targetLat = tripCoordinates[0];
+    const targetLng = tripCoordinates[1];
+
+    if (startLat === targetLat && startLng === targetLng) return;
+
+    const startTime = performance.now();
+    const duration = 1000; // 1 second smooth glide animation
+
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+    const animate = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+
+      const currentLat = startLat + (targetLat - startLat) * progress;
+      const currentLng = startLng + (targetLng - startLng) * progress;
+
+      const interpolated = [currentLat, currentLng];
+      currentCoordsRef.current = interpolated;
+      setAnimatedTripCoords(interpolated);
+
+      if (progress < 1) {
+        animFrameRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    animFrameRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [tripCoordinates?.[0], tripCoordinates?.[1]]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto py-6">
@@ -346,8 +399,8 @@ export default function DashboardPage({ latestEvent }) {
             {Array.isArray(routeCoordinates) && routeCoordinates.length > 0 && (
               <Polyline positions={routeCoordinates} color="#0d9488" weight={5} />
             )}
-            {Array.isArray(tripCoordinates) && (
-              <Marker position={tripCoordinates}>
+            {Array.isArray(animatedTripCoords || tripCoordinates) && (
+              <Marker position={animatedTripCoords || tripCoordinates}>
                 <Popup>Current bus location</Popup>
               </Marker>
             )}

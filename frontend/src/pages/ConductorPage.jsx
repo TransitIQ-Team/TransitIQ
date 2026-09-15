@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Navigation, Play, Square, AlertTriangle } from 'lucide-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+
 export default function ConductorPage() {
   const [tripId, setTripId] = useState('TRIP-101');
   const [direction, setDirection] = useState('SEHORE_TO_VIT');
@@ -49,7 +51,7 @@ export default function ConductorPage() {
         setLatestGps(payload);
 
         try {
-          const res = await fetch(`http://localhost:5000/api/trips/${tripId}/location`, {
+          const res = await fetch(`${API_URL}/api/trips/${tripId}/location`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -60,7 +62,7 @@ export default function ConductorPage() {
             setErrorMsg(`Backend Error: ${errData.error || res.statusText}`);
           }
         } catch (err) {
-          setErrorMsg('Backend Connection Failed: Is local server running on port 5000?');
+          setErrorMsg('Backend Connection Failed: Is server reachable?');
         }
       },
       (err) => {
@@ -91,7 +93,7 @@ export default function ConductorPage() {
     setStatus('Ended');
 
     try {
-      await fetch(`http://localhost:5000/api/trips/${tripId}/end`, {
+      await fetch(`${API_URL}/api/trips/${tripId}/end`, {
         method: 'POST'
       });
     } catch (err) {
