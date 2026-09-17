@@ -32,10 +32,10 @@ export default function HomePage({ setActiveTab }) {
               <span className="text-sm font-bold text-emerald-700 uppercase tracking-wider">Get Started Now</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 mb-2">
-              Check Your Bus & Book Your Seat
+              Check Your Bus Status
             </h2>
             <p className="text-slate-700 text-sm sm:text-base font-medium">
-              See when your bus will arrive, watch it coming, and book your seat with confidence.
+              See when your bus will arrive, track its location, and understand prediction confidence.
             </p>
           </div>
           <button 
@@ -59,7 +59,7 @@ export default function HomePage({ setActiveTab }) {
 
           <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">
             Smart Bus Tracking, <br />
-            <span className="text-teal-600">Always Accurate</span>
+            <span className="text-teal-600">Even Without Live Signal</span>
           </h1>
 
           <p className="text-slate-600 text-base leading-relaxed max-w-xl">

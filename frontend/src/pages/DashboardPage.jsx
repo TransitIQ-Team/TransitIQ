@@ -242,25 +242,25 @@ export default function DashboardPage({ latestEvent }) {
         };
       case 'LIVE':
         return {
-          label: '✓ Bus location is live • Just updated',
+          label: 'Live GPS signal · ETA uses current bus location',
           color: 'bg-emerald-50 text-emerald-800 border-emerald-300',
           icon: Wifi
         };
       case 'PARTIAL':
         return {
-          label: '⚠ No live GPS • Using last known position',
+          label: 'Limited GPS signal · ETA combines live and historical data',
           color: 'bg-amber-50 text-amber-800 border-amber-300',
           icon: SignalLow
         };
       case 'HISTORICAL':
         return {
-          label: 'GPS signal lost • Using past journey data',
+          label: 'No live GPS signal · ETA based on historical trip data',
           color: 'bg-slate-100 text-slate-800 border-slate-300',
           icon: SignalZero
         };
       default:
         return {
-          label: 'Arrival time not available yet • Check back when bus is on the route',
+          label: 'No live GPS signal · ETA based on historical trip data',
           color: 'bg-slate-100 text-slate-700 border-slate-200',
           icon: SignalZero
         };
@@ -505,24 +505,24 @@ export default function DashboardPage({ latestEvent }) {
         </div>
       </div>
 
-      {/* Bus Booking CTA Section - with breathable distance */}
+      {/* Bus Tracking CTA Section - with breathable distance */}
       <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-200 rounded-3xl p-8 sm:p-10 shadow-sm hover:shadow-md transition-shadow">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
           <div className="flex-1">
             <div className="flex items-center gap-2 mb-2">
               <Bus className="w-6 h-6 text-emerald-600" />
-              <span className="text-sm font-bold text-emerald-700 uppercase tracking-wider">Ready to Book?</span>
+              <span className="text-sm font-bold text-emerald-700 uppercase tracking-wider">Live Tracking</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 mb-2">
-              Reserve Your Seat Now
+              Track Your Bus Live
             </h2>
             <p className="text-slate-700 text-sm sm:text-base font-medium">
-              Confirm the bus is on its way and book your seat in seconds. See live updates as it gets closer.
+              View the current bus location, ETA and prediction confidence.
             </p>
           </div>
           <button className="w-full sm:w-auto px-8 py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-base rounded-2xl shadow-lg hover:shadow-xl transition-all transform hover:scale-105 flex items-center justify-center gap-2 whitespace-nowrap">
             <Bus className="w-5 h-5" />
-            Book Now
+            Track Bus
           </button>
         </div>
       </div>
