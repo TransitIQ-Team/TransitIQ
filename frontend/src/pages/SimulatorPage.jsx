@@ -20,6 +20,8 @@ const ROUTE_VIT_TO_SEHORE = [
   { name: "Sehore Bus Stand", lat: 23.200078, lng: 77.087906 }
 ];
 
+const DEMO_TOTAL_STEPS = 40; // Completes full corridor in 40 pings * 1.5s = 60 seconds
+
 export default function SimulatorPage() {
   const [direction, setDirection] = useState('SEHORE_TO_VIT');
   const [tripId, setTripId] = useState('TRIP-101');
@@ -27,6 +29,8 @@ export default function SimulatorPage() {
   const [currentPoint, setCurrentPoint] = useState(null);
   const [pingCount, setPingCount] = useState(0);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [loadingRoute, setLoadingRoute] = useState(false);
+  const [isStaticFallback, setIsStaticFallback] = useState(false);
 
   const timerRef = useRef(null);
   const stepRef = useRef(0);
@@ -40,7 +44,30 @@ export default function SimulatorPage() {
     };
   }, []);
 
+  const osrmPathRef = useRef([]);
+
   const getInterpolatedPoint = (stepIndex) => {
+    // 1. OSRM Road Geometry Path (Primary)
+    if (osrmPathRef.current && osrmPathRef.current.length > 0) {
+      const roadCoords = osrmPathRef.current;
+      const totalPoints = roadCoords.length;
+      
+      // Step proportionally through OSRM road points across DEMO_TOTAL_STEPS
+      const progress = Math.min(stepIndex / DEMO_TOTAL_STEPS, 1);
+      const pointIndex = Math.min(Math.floor(progress * (totalPoints - 1)), totalPoints - 1);
+      const pt = roadCoords[pointIndex];
+
+      const startName = waypoints[0]?.name || "Origin";
+      const endName = waypoints[waypoints.length - 1]?.name || "Destination";
+
+      return {
+        lat: pt.lat,
+        lng: pt.lng,
+        segmentName: `${startName} ➔ ${endName} (OSRM Road)`
+      };
+    }
+
+    // 2. Fallback: Straight-line Static Waypoint Interpolation
     const totalWaypoints = waypoints.length;
     const maxSteps = (totalWaypoints - 1) * totalSubStepsRef.current;
     const clampedStep = stepIndex % (maxSteps + 1);
@@ -50,7 +77,7 @@ export default function SimulatorPage() {
 
     if (segment >= totalWaypoints - 1) {
       const last = waypoints[totalWaypoints - 1];
-      return { lat: last.lat, lng: last.lng, waypointName: last.name };
+      return { lat: last.lat, lng: last.lng, segmentName: `${last.name} (Static Fallback)` };
     }
 
     const p1 = waypoints[segment];
@@ -62,56 +89,77 @@ export default function SimulatorPage() {
     return {
       lat,
       lng,
-      segmentName: `${p1.name} ➔ ${p2.name}`
+      segmentName: `${p1.name} ➔ ${p2.name} (Static Fallback)`
     };
   };
 
-// Inside SimulatorPage.jsx -> sendPing function
+  const sendPing = async () => {
+    const pt = getInterpolatedPoint(stepRef.current);
+    const timestamp = new Date().toISOString();
 
-const sendPing = async () => {
-  const pt = getInterpolatedPoint(stepRef.current);
-  const timestamp = new Date().toISOString();
+    const payload = {
+      latitude: pt.lat,
+      longitude: pt.lng,
+      accuracy: 5.0,
+      timestamp,
+      source: 'simulator',
+      direction: direction
+    };
 
-  // ADDED: Include direction in the payload
-  const payload = {
-    latitude: pt.lat,
-    longitude: pt.lng,
-    accuracy: 5.0,
-    timestamp,
-    source: 'simulator',
-    direction: direction // <-- ADD THIS LINE ('SEHORE_TO_VIT' or 'VIT_TO_SEHORE')
+    setCurrentPoint({ ...payload, segmentName: pt.segmentName });
+    setPingCount((prev) => prev + 1);
+
+    try {
+      const res = await fetch(`${API_URL}/api/trips/${tripId}/location`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        setErrorMsg(`Simulator Backend Error: ${errData.error || res.statusText}`);
+      } else {
+        setErrorMsg(null);
+      }
+    } catch (err) {
+      setErrorMsg('Backend Connection Failed: Ensure backend server is running.');
+    }
+
+    stepRef.current += 1;
   };
 
-  setCurrentPoint({ ...payload, segmentName: pt.segmentName });
-  setPingCount((prev) => prev + 1);
-
-  try {
-    const res = await fetch(`${API_URL}/api/trips/${tripId}/location`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!res.ok) {
-      const errData = await res.json();
-      setErrorMsg(`Simulator Backend Error: ${errData.error || res.statusText}`);
-    } else {
-      setErrorMsg(null);
-    }
-  } catch (err) {
-    setErrorMsg('Backend Connection Failed: Ensure backend server is running.');
-  }
-
-  stepRef.current += 1;
-};
-
-  const startSimulation = () => {
+  const startSimulation = async () => {
     if (timerRef.current) clearInterval(timerRef.current);
     stepRef.current = 0;
     setPingCount(0);
-    setSimState('RUNNING');
     setErrorMsg(null);
+    osrmPathRef.current = [];
+    setIsStaticFallback(false);
+    setLoadingRoute(true);
 
+    // Attempt to fetch OSRM road geometry for active direction BEFORE starting ticker
+    try {
+      const res = await fetch(`${API_URL}/api/route-geometry?direction=${direction}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.geometry?.coordinates?.length > 0) {
+          // Convert GeoJSON [lng, lat] to { lat, lng }
+          osrmPathRef.current = data.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
+        } else {
+          setIsStaticFallback(true);
+        }
+      } else {
+        setIsStaticFallback(true);
+      }
+    } catch (err) {
+      console.warn('OSRM road geometry fetch failed, falling back to static waypoints:', err);
+      setIsStaticFallback(true);
+    } finally {
+      setLoadingRoute(false);
+    }
+
+    setSimState('RUNNING');
     sendPing();
     timerRef.current = setInterval(sendPing, 1500);
   };
@@ -164,7 +212,7 @@ const sendPing = async () => {
             <span className={`text-xs font-bold ${
               simState === 'RUNNING' ? 'text-teal-600' : simState === 'PAUSED' ? 'text-amber-600' : 'text-slate-500'
             }`}>
-              {simState}
+              {loadingRoute ? 'Loading...' : simState}
             </span>
           </div>
         </div>
@@ -177,7 +225,7 @@ const sendPing = async () => {
             </label>
             <select
               value={direction}
-              disabled={simState === 'RUNNING' || simState === 'PAUSED'}
+              disabled={simState === 'RUNNING' || simState === 'PAUSED' || loadingRoute}
               onChange={(e) => setDirection(e.target.value)}
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 text-xs font-semibold focus:outline-none disabled:opacity-60"
             >
@@ -193,7 +241,7 @@ const sendPing = async () => {
             <input
               type="text"
               value={tripId}
-              disabled={simState === 'RUNNING' || simState === 'PAUSED'}
+              disabled={simState === 'RUNNING' || simState === 'PAUSED' || loadingRoute}
               onChange={(e) => setTripId(e.target.value)}
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-mono font-semibold text-xs focus:outline-none disabled:opacity-60"
             />
@@ -204,10 +252,10 @@ const sendPing = async () => {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <button
             onClick={startSimulation}
-            disabled={simState === 'RUNNING'}
+            disabled={simState === 'RUNNING' || loadingRoute}
             className="py-2.5 px-3 bg-teal-600 hover:bg-teal-700 disabled:bg-slate-100 disabled:text-slate-400 text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1"
           >
-            <Play className="w-3.5 h-3.5" /> Start
+            <Play className="w-3.5 h-3.5" /> {loadingRoute ? 'Loading...' : 'Start'}
           </button>
 
           <button
@@ -249,6 +297,13 @@ const sendPing = async () => {
             <span className="text-[11px] font-bold text-slate-700">Simulated GPS Feed</span>
             <span className="text-[10px] text-slate-500 font-mono">Pings: {pingCount}</span>
           </div>
+
+          {isStaticFallback && (
+            <div className="p-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-[11px] font-semibold flex items-center gap-1.5 font-sans">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              <span>Approximate Route Mode (OSRM Offline)</span>
+            </div>
+          )}
 
           {currentPoint ? (
             <div className="space-y-2 text-xs font-mono text-slate-700 pt-1">

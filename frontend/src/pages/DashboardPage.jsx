@@ -7,12 +7,39 @@ import L from 'leaflet';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
 
+const STATIC_WAYPOINTS = {
+  SEHORE_TO_VIT: [
+    [23.200078, 77.087906],
+    [23.164298, 77.005836],
+    [23.118575, 76.903982],
+    [23.102305, 76.875963],
+    [23.081236, 76.842881]
+  ],
+  VIT_TO_SEHORE: [
+    [23.081345, 76.842785],
+    [23.118575, 76.903982],
+    [23.164486, 77.005700],
+    [23.193541, 77.073072],
+    [23.197895, 77.081507],
+    [23.200078, 77.087906]
+  ]
+};
+
 // Fix for default marker icons broken by Webpack/Vite bundlers
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+const crowdVerifiedMarkerIcon = L.divIcon({
+  className: 'custom-crowd-marker',
+  html: `<div style="background-color: #0284c7; color: white; padding: 4px 10px; border-radius: 20px; font-weight: bold; font-size: 11px; border: 2px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3); display: flex; align-items: center; gap: 4px; white-space: nowrap;">
+    <span>✓ Bus Verified</span>
+  </div>`,
+  iconSize: [110, 28],
+  iconAnchor: [55, 14]
 });
 
 export default function DashboardPage({ latestEvent }) {
@@ -24,6 +51,10 @@ export default function DashboardPage({ latestEvent }) {
   const [loading, setLoading] = useState(false);
   const [socketTripCoords, setSocketTripCoords] = useState(null);
   const [socketRouteCoords, setSocketRouteCoords] = useState([]);
+  const [liveDataState, setLiveDataState] = useState(null);
+  const [reportingPresence, setReportingPresence] = useState(false);
+  const [reportSuccessMsg, setReportSuccessMsg] = useState(null);
+  const socketRef = React.useRef(null);
 
   useEffect(() => {
     const socket = io(API_URL, {
@@ -31,12 +62,37 @@ export default function DashboardPage({ latestEvent }) {
       reconnectionAttempts: 5,
       timeout: 3000
     });
+    socketRef.current = socket;
 
     socket.on('connect', () => {
       socket.emit('passenger:subscribe-trip', { trip_id: 'TRIP-101' });
     });
 
+    socket.on('route:geometry-loaded', (data) => {
+      const rawGeometry = data?.geometry || data?.routeCoordinates;
+      let routeCoordinates = [];
+      if (rawGeometry?.coordinates && Array.isArray(rawGeometry.coordinates)) {
+        // Source is GeoJSON object with [lng, lat] coordinates -> Convert to [lat, lng] for Leaflet
+        routeCoordinates = rawGeometry.coordinates.map(([lng, lat]) => [lat, lng]);
+      } else if (Array.isArray(rawGeometry)) {
+        // Source is pre-formatted routeCoordinates array already in [lat, lng] order -> Retain [lat, lng]
+        routeCoordinates = rawGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[0], pt[1]] : pt) : [pt.lat, pt.lng]);
+      }
+      if (routeCoordinates.length >= 2) {
+        setSocketRouteCoords(routeCoordinates);
+      }
+    });
+
+    socket.on('trip:signal-status-updated', (status) => {
+      if (status && status.data_state) {
+        setLiveDataState(status.data_state);
+      }
+    });
+
     socket.on('trip:location-updated', (data) => {
+      if (data && data.data_state) {
+        setLiveDataState(data.data_state);
+      }
       const tripCoordinates = (data?.latitude != null && data?.longitude != null)
         ? [data.latitude, data.longitude]
         : null;
@@ -44,21 +100,46 @@ export default function DashboardPage({ latestEvent }) {
       const rawGeometry = data?.osrmGeometry || data?.geometry || data?.routeCoordinates;
       let routeCoordinates = [];
       if (rawGeometry?.coordinates && Array.isArray(rawGeometry.coordinates)) {
+        // Source is GeoJSON object with [lng, lat] coordinates -> Convert to [lat, lng] for Leaflet
         routeCoordinates = rawGeometry.coordinates.map(([lng, lat]) => [lat, lng]);
       } else if (Array.isArray(rawGeometry)) {
-        routeCoordinates = rawGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[1], pt[0]] : pt) : [pt.lat, pt.lng]);
+        // Source is pre-formatted routeCoordinates array already in [lat, lng] order -> Retain [lat, lng]
+        routeCoordinates = rawGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[0], pt[1]] : pt) : [pt.lat, pt.lng]);
       }
 
       console.log("Received Map Data:", { tripCoordinates, routeCoordinates });
 
       if (tripCoordinates) setSocketTripCoords(tripCoordinates);
-      if (routeCoordinates.length > 0) setSocketRouteCoords(routeCoordinates);
+      if (routeCoordinates.length >= 2) setSocketRouteCoords(routeCoordinates);
     });
 
     return () => {
       socket.disconnect();
     };
   }, []);
+
+  // Fetch full OSRM route geometry on component mount and direction change
+  useEffect(() => {
+    let isMounted = true;
+    fetch(`${API_URL}/api/route-geometry?direction=${direction}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (isMounted && data.success && data.geometry?.coordinates) {
+          // Source is OSRM GeoJSON with [lng, lat] coordinates -> Convert to [lat, lng] for Leaflet
+          const formatted = data.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+          if (formatted.length >= 2) {
+            setSocketRouteCoords(formatted);
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch initial OSRM route geometry:', err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [direction]);
 
   useEffect(() => {
     if (!latestEvent) return;
@@ -70,9 +151,11 @@ export default function DashboardPage({ latestEvent }) {
     const rawGeometry = latestEvent?.osrmGeometry || latestEvent?.geometry || latestEvent?.routeCoordinates;
     let routeCoordinates = [];
     if (rawGeometry?.coordinates && Array.isArray(rawGeometry.coordinates)) {
+      // Source is GeoJSON object with [lng, lat] coordinates -> Convert to [lat, lng] for Leaflet
       routeCoordinates = rawGeometry.coordinates.map(([lng, lat]) => [lat, lng]);
     } else if (Array.isArray(rawGeometry)) {
-      routeCoordinates = rawGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[1], pt[0]] : pt) : [pt.lat, pt.lng]);
+      // Source is pre-formatted routeCoordinates array already in [lat, lng] order -> Retain [lat, lng]
+      routeCoordinates = rawGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[0], pt[1]] : pt) : [pt.lat, pt.lng]);
     }
 
     console.log("Received Map Data:", { tripCoordinates, routeCoordinates });
@@ -116,8 +199,47 @@ export default function DashboardPage({ latestEvent }) {
     }
   };
 
+  const handleConfirmArrival = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setReportingPresence(true);
+    setReportSuccessMsg(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        if (socketRef.current) {
+          socketRef.current.emit('passenger:report-presence', {
+            trip_id: 'TRIP-101',
+            passengerLat: latitude,
+            passengerLng: longitude,
+            clientId: socketRef.current.id
+          });
+        }
+        setReportingPresence(false);
+        setReportSuccessMsg('Arrival reported! Bus position updated with crowd verification.');
+        setTimeout(() => setReportSuccessMsg(null), 6000);
+      },
+      (err) => {
+        console.error('Error fetching position for presence report:', err);
+        setReportingPresence(false);
+        alert('Could not retrieve location. Please check location permissions.');
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  };
+
   const getSignalBadge = (state) => {
     switch (state) {
+      case 'CROWD_VERIFIED':
+        return {
+          label: '✓ Verified by Passengers • Live Crowd Presence',
+          color: 'bg-sky-50 text-sky-800 border-sky-300',
+          icon: CheckCircle2
+        };
       case 'LIVE':
         return {
           label: '✓ Bus location is live • Just updated',
@@ -145,7 +267,8 @@ export default function DashboardPage({ latestEvent }) {
     }
   };
 
-  const badge = getSignalBadge(etaData ? etaData.data_state : 'NO_DATA');
+  const activeDataState = liveDataState || (etaData ? etaData.data_state : 'NO_DATA');
+  const badge = getSignalBadge(activeDataState);
   const BadgeIcon = badge.icon;
   const tripData = etaData?.tripData || etaData?.trip || etaData;
   const fallbackTripCoords = (tripData?.latitude != null && tripData?.longitude != null)
@@ -155,63 +278,193 @@ export default function DashboardPage({ latestEvent }) {
 
   const rawEtaGeometry = etaData?.geometry || etaData?.osrm_route?.geometry || etaData?.route_geometry || etaData?.routeCoordinates;
   const fallbackRouteCoords = rawEtaGeometry?.coordinates
+    // GeoJSON geometry object with [lng, lat] coordinates -> Convert to [lat, lng] for Leaflet
     ? rawEtaGeometry.coordinates.map(([lng, lat]) => [lat, lng])
-    : (Array.isArray(rawEtaGeometry) ? rawEtaGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[1], pt[0]] : pt) : [pt.lat, pt.lng]) : []);
+    // Pre-formatted routeCoordinates array already in [lat, lng] order -> Retain [lat, lng]
+    : (Array.isArray(rawEtaGeometry) ? rawEtaGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[0], pt[1]] : pt) : [pt.lat, pt.lng]) : []);
 
-  const routeCoordinates = socketRouteCoords.length > 0 ? socketRouteCoords : fallbackRouteCoords;
+  const staticHighwayCoords = STATIC_WAYPOINTS[direction] || STATIC_WAYPOINTS.SEHORE_TO_VIT;
+  const activeRoadCoords = (socketRouteCoords && socketRouteCoords.length >= 2)
+    ? socketRouteCoords
+    : ((fallbackRouteCoords && fallbackRouteCoords.length >= 2) ? fallbackRouteCoords : staticHighwayCoords);
+
+  const routeCoordinates = activeRoadCoords;
 
   const [animatedTripCoords, setAnimatedTripCoords] = useState(null);
   const animFrameRef = React.useRef(null);
-  const currentCoordsRef = React.useRef(null);
+  const visualDistanceRef = React.useRef(0);
+  const targetDistanceRef = React.useRef(0);
+  const activeRoadCoordsRef = React.useRef([]);
+  const cumDistancesRef = React.useRef([]);
+  const lastTargetIdxRef = React.useRef(0);
 
-  // Smooth linear interpolation (LERP) whenever tripCoordinates target changes
+  // Haversine distance in meters between two [lat, lng] points
+  const haversineMeters = (p1, p2) => {
+    const R = 6371000;
+    const dLat = (p2[0] - p1[0]) * Math.PI / 180;
+    const dLng = (p2[1] - p1[1]) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(p1[0] * Math.PI / 180) * Math.cos(p2[0] * Math.PI / 180) *
+              Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  };
+
+  // Build cumulative Haversine distance array for active road polyline
+  const buildCumulativeDistances = (coordsArray) => {
+    if (!coordsArray || coordsArray.length === 0) return [];
+    const cum = [0];
+    for (let i = 0; i < coordsArray.length - 1; i++) {
+      const dist = haversineMeters(coordsArray[i], coordsArray[i + 1]);
+      cum.push(cum[i] + dist);
+    }
+    return cum;
+  };
+
+  // Sync activeRoadCoordsRef and re-build cumulative distance table
+  useEffect(() => {
+    activeRoadCoordsRef.current = activeRoadCoords;
+    cumDistancesRef.current = buildCumulativeDistances(activeRoadCoords);
+  }, [activeRoadCoords]);
+
+  const distSq = (p1, p2) => {
+    const dLat = p1[0] - p2[0];
+    const dLng = p1[1] - p2[1];
+    return dLat * dLat + dLng * dLng;
+  };
+
+  const findForwardIndex = (coordsArray, target, fromIdx) => {
+    if (!coordsArray || coordsArray.length === 0) return 0;
+    const startSearchIdx = Math.min(fromIdx, coordsArray.length - 1);
+    let minIndex = startSearchIdx;
+    let minDistance = Infinity;
+
+    for (let i = startSearchIdx; i < coordsArray.length; i++) {
+      const d = distSq(coordsArray[i], target);
+      if (d < minDistance) {
+        minDistance = d;
+        minIndex = i;
+      }
+    }
+    return minIndex;
+  };
+
+  // Handle new Socket.IO target arrivals
   useEffect(() => {
     if (!tripCoordinates) {
       setAnimatedTripCoords(null);
-      currentCoordsRef.current = null;
+      visualDistanceRef.current = 0;
+      targetDistanceRef.current = 0;
+      lastTargetIdxRef.current = 0;
       return;
     }
 
-    if (!currentCoordsRef.current) {
-      currentCoordsRef.current = tripCoordinates;
-      setAnimatedTripCoords(tripCoordinates);
-      return;
-    }
+    const roadLayer = (activeRoadCoordsRef.current && activeRoadCoordsRef.current.length >= 2)
+      ? activeRoadCoordsRef.current
+      : (STATIC_WAYPOINTS[direction] || STATIC_WAYPOINTS.SEHORE_TO_VIT);
 
-    const startLat = currentCoordsRef.current[0];
-    const startLng = currentCoordsRef.current[1];
-    const targetLat = tripCoordinates[0];
-    const targetLng = tripCoordinates[1];
+    const cumDist = cumDistancesRef.current.length === roadLayer.length
+      ? cumDistancesRef.current
+      : buildCumulativeDistances(roadLayer);
 
-    if (startLat === targetLat && startLng === targetLng) return;
+    const targetIdx = findForwardIndex(roadLayer, tripCoordinates, lastTargetIdxRef.current);
 
-    const startTime = performance.now();
-    const duration = 1000; // 1 second smooth glide animation
-
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-
-    const animate = (now) => {
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-
-      const currentLat = startLat + (targetLat - startLat) * progress;
-      const currentLng = startLng + (targetLng - startLng) * progress;
-
-      const interpolated = [currentLat, currentLng];
-      currentCoordsRef.current = interpolated;
-      setAnimatedTripCoords(interpolated);
-
-      if (progress < 1) {
-        animFrameRef.current = requestAnimationFrame(animate);
+    if (targetIdx >= lastTargetIdxRef.current && cumDist[targetIdx] !== undefined) {
+      lastTargetIdxRef.current = targetIdx;
+      // Monotonic update: target distance must never decrease
+      if (cumDist[targetIdx] > targetDistanceRef.current) {
+        targetDistanceRef.current = cumDist[targetIdx];
       }
+    }
+  }, [tripCoordinates?.[0], tripCoordinates?.[1]]);
+
+  // Reset forward distance progress tracking when route direction changes
+  useEffect(() => {
+    visualDistanceRef.current = 0;
+    targetDistanceRef.current = 0;
+    lastTargetIdxRef.current = 0;
+    setAnimatedTripCoords(null);
+  }, [direction]);
+
+  // Convert distance along polyline back to exact interpolated [lat, lng]
+  const getCoordinateAtDistance = (coordsArray, cumDistArray, distanceMeters) => {
+    if (!coordsArray || coordsArray.length === 0) return null;
+    if (coordsArray.length === 1 || distanceMeters <= 0) return coordsArray[0];
+
+    const maxDist = cumDistArray[cumDistArray.length - 1] || 0;
+    if (distanceMeters >= maxDist) return coordsArray[coordsArray.length - 1];
+
+    for (let i = 0; i < cumDistArray.length - 1; i++) {
+      const d1 = cumDistArray[i];
+      const d2 = cumDistArray[i + 1];
+      if (distanceMeters >= d1 && distanceMeters <= d2) {
+        const segLen = d2 - d1;
+        const fraction = segLen > 0 ? (distanceMeters - d1) / segLen : 0;
+        const p1 = coordsArray[i];
+        const p2 = coordsArray[i + 1];
+        const lat = p1[0] + (p2[0] - p1[0]) * fraction;
+        const lng = p1[1] + (p2[1] - p1[1]) * fraction;
+        return [lat, lng];
+      }
+    }
+
+    return coordsArray[coordsArray.length - 1];
+  };
+
+  // Persistent Single requestAnimationFrame Loop (Constant Smooth Velocity)
+  useEffect(() => {
+    let running = true;
+    let lastTime = performance.now();
+
+    const tick = (now) => {
+      if (!running) return;
+
+      const deltaSec = Math.min((now - lastTime) / 1000, 0.1); // Clamp delta to avoid huge skips
+      lastTime = now;
+
+      const roadLayer = (activeRoadCoordsRef.current && activeRoadCoordsRef.current.length >= 2)
+        ? activeRoadCoordsRef.current
+        : (STATIC_WAYPOINTS[direction] || STATIC_WAYPOINTS.SEHORE_TO_VIT);
+
+      const cumDist = cumDistancesRef.current.length === roadLayer.length
+        ? cumDistancesRef.current
+        : buildCumulativeDistances(roadLayer);
+
+      const maxMeters = cumDist[cumDist.length - 1] || 0;
+      const targetMeters = Math.min(targetDistanceRef.current, maxMeters);
+      const currentMeters = visualDistanceRef.current;
+
+      if (currentMeters < targetMeters) {
+        const remaining = targetMeters - currentMeters;
+        // Constant smooth speed (~30 m/s / ~100 km/h) with subtle catchup factor, eliminating surging & deceleration spikes
+        const speedMetersPerSec = Math.max(25, Math.min(45, remaining / 1.2));
+        const newDistance = Math.min(currentMeters + speedMetersPerSec * deltaSec, targetMeters);
+
+        visualDistanceRef.current = newDistance;
+
+        const pos = getCoordinateAtDistance(roadLayer, cumDist, newDistance);
+        if (pos) {
+          setAnimatedTripCoords(pos);
+        }
+      } else if (targetMeters > 0 && currentMeters === 0) {
+        // Initial positioning
+        const pos = getCoordinateAtDistance(roadLayer, cumDist, targetMeters);
+        if (pos) {
+          setAnimatedTripCoords(pos);
+        }
+      }
+
+      animFrameRef.current = requestAnimationFrame(tick);
     };
 
-    animFrameRef.current = requestAnimationFrame(animate);
+    animFrameRef.current = requestAnimationFrame(tick);
 
     return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      running = false;
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
     };
-  }, [tripCoordinates?.[0], tripCoordinates?.[1]]);
+  }, [direction]);
 
   return (
     <div className="space-y-8 max-w-4xl mx-auto py-6">
@@ -365,15 +618,41 @@ export default function DashboardPage({ latestEvent }) {
           </div>
         </div>
 
-        {/* Bus Location Status */}
-        <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center gap-3 text-xs text-slate-700">
-          <MapPin className="w-4 h-4 text-teal-600 shrink-0" />
-          <div>
-            <span className="font-bold text-slate-900">Bus is Currently: </span>
-            <span>
-              {etaData && etaData.current_segment ? etaData.current_segment : 'Between Amlaha and Toll Plaza'}
-            </span>
+        {/* Bus Location Status & Crowd Verification */}
+        <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3 text-xs text-slate-700">
+          <div className="flex items-center gap-3">
+            <MapPin className="w-4 h-4 text-teal-600 shrink-0" />
+            <div>
+              <span className="font-bold text-slate-900">Bus is Currently: </span>
+              <span>
+                {etaData && etaData.current_segment ? etaData.current_segment : 'Between Amlaha and Toll Plaza'}
+              </span>
+            </div>
           </div>
+
+          {(activeDataState === 'HISTORICAL' || activeDataState === 'NO_DATA') && (
+            <div className="pt-3 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 bg-sky-50 p-3.5 rounded-xl border border-sky-200">
+              <div>
+                <span className="font-bold text-sky-900 text-xs block">Is the bus here? Confirm arrival</span>
+                <span className="text-[11px] text-sky-700">Verify bus presence to restore live arrival updates for all passengers.</span>
+              </div>
+              <button
+                onClick={handleConfirmArrival}
+                disabled={reportingPresence}
+                className="px-4 py-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-sm transition-all whitespace-nowrap flex items-center gap-1.5 shrink-0"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                {reportingPresence ? 'Verifying Location...' : 'Confirm Arrival'}
+              </button>
+            </div>
+          )}
+
+          {reportSuccessMsg && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{reportSuccessMsg}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -397,11 +676,16 @@ export default function DashboardPage({ latestEvent }) {
               attribution="&copy; OpenStreetMap contributors"
             />
             {Array.isArray(routeCoordinates) && routeCoordinates.length > 0 && (
-              <Polyline positions={routeCoordinates} color="#0d9488" weight={5} />
+              <Polyline positions={routeCoordinates} color="#0d9488" weight={5} smoothFactor={0} />
             )}
             {Array.isArray(animatedTripCoords || tripCoordinates) && (
-              <Marker position={animatedTripCoords || tripCoordinates}>
-                <Popup>Current bus location</Popup>
+              <Marker
+                position={animatedTripCoords || tripCoordinates}
+                icon={activeDataState === 'CROWD_VERIFIED' ? crowdVerifiedMarkerIcon : new L.Icon.Default()}
+              >
+                <Popup>
+                  {activeDataState === 'CROWD_VERIFIED' ? '✓ Verified by Passengers' : 'Current bus location'}
+                </Popup>
               </Marker>
             )}
           </MapContainer>

@@ -2,7 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics, getOSRMRoute, PILOT_WAYPOINTS } from './etaService.js';
+import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics, getOSRMRoute, matchCoordinatesToRoad, PILOT_WAYPOINTS } from './etaService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -27,6 +27,10 @@ const io = new Server(httpServer, {
 // In-memory Live Position & Signal Evaluator Store
 // Map<trip_id, { trip_id, latitude, longitude, accuracy, timestamp, source, serverReceivedAt: number }>
 const activeTripsStore = new Map();
+
+// In-memory Rolling Position Cache Store (last 2 tracked positions for map matching)
+// Map<trip_id, Array<{ lat: number, lng: number }>>
+const tripHistoryStore = new Map();
 
 // Helper: Evaluates signal data_state and age from server receipt timestamp
 export function evaluateSignalStatus(storedTrip, nowMs = Date.now()) {
@@ -67,6 +71,35 @@ setInterval(() => {
     io.emit('trip:signal-status-updated', signalStatus);
   });
 }, 5000);
+
+// Telemetry Ingestion Fallback (handles /api/ingest or GET/POST /?lat=...&lon=...)
+app.all(['/api/ingest', '/'], (req, res, next) => {
+  const raw = Object.keys(req.query).length ? req.query : req.body;
+  
+  if (raw && (raw.lat || raw.latitude)) {
+    const locationData = {
+      trip_id: raw.id || raw.deviceId || 'TRIP-101',
+      latitude: parseFloat(raw.lat || raw.latitude),
+      longitude: parseFloat(raw.lon || raw.longitude),
+      accuracy: parseFloat(raw.accuracy || 10),
+      timestamp: new Date().toISOString(),
+      source: 'conductor',
+      serverReceivedAt: Date.now()
+    };
+
+    activeTripsStore.set(locationData.trip_id, locationData);
+    io.emit('trip:location-updated', locationData);
+    console.log('🚌 Live GPS Processed & Broadcasted:', locationData);
+    return res.status(200).send('OK');
+  }
+
+  // If request path is '/' without coordinates, pass through to static API landing handler below
+  if (req.path === '/') {
+    return next();
+  }
+
+  return res.status(200).send('OK');
+});
 
 // GET /
 app.get('/', (req, res) => {
@@ -112,15 +145,15 @@ app.get('/api/trips/:id/signal-status', (req, res) => {
 });
 
 // GET /api/routes/:id/eta
-app.get('/api/routes/:id/eta', (req, res) => {
+app.get('/api/routes/:id/eta', async (req, res) => {
   const route_id = req.params.id;
   const { trip_id, direction, target_stop } = req.query;
 
-  const targetTripId = trip_id || 'TRIP-101';ī
+  const targetTripId = trip_id || 'TRIP-101';
   const targetDirection = direction || 'SEHORE_TO_VIT';
   const targetStopName = target_stop || 'VIT Bhopal Outer Highway';
 
-  const sīoredTrip = activeTripsStore.get(targetTripId);
+  const storedTrip = activeTripsStore.get(targetTripId);
   const signalStatus = evaluateSignalStatus(storedTrip);
 
   const etaResponse = computeSignalAwareEta({
@@ -130,7 +163,13 @@ app.get('/api/routes/:id/eta', (req, res) => {
     targetStop: targetStopName
   });
 
-  return res.status(200).json(etaResponse);
+  const corridor = await getFullCorridorGeometry(targetDirection);
+
+  return res.status(200).json({
+    ...etaResponse,
+    geometry: corridor.geometry,
+    routeCoordinates: corridor.routeCoordinates
+  });
 });
 
 // GET /api/trips/:id/eta (supports ?mode=historical|ml|hybrid)
@@ -142,35 +181,39 @@ app.get('/api/trips/:id/eta', async (req, res) => {
 
   const storedTrip = activeTripsStore.get(trip_id);
   const signalStatus = evaluateSignalStatus(storedTrip, Date.now());
+  const corridor = await getFullCorridorGeometry(direction);
 
+  let etaResult;
   if (mode === 'hybrid') {
-    const etaResult = await computeHybridEta({
+    etaResult = await computeHybridEta({
       storedTrip,
       signalStatus,
       direction,
       targetStop
     });
-    return res.status(200).json({ trip_id, ...etaResult });
-  }
-
-  if (mode === 'ml') {
-    const etaResult = await computeSignalAwareEtaWithMl({
+  } else if (mode === 'ml') {
+    etaResult = await computeSignalAwareEtaWithMl({
       storedTrip,
       signalStatus,
       direction,
       targetStop,
       useMl: true
     });
-    return res.status(200).json({ trip_id, ...etaResult });
+  } else {
+    etaResult = computeSignalAwareEta({
+      storedTrip,
+      signalStatus,
+      direction,
+      targetStop
+    });
   }
 
-  const etaResult = computeSignalAwareEta({
-    storedTrip,
-    signalStatus,
-    direction,
-    targetStop
+  return res.status(200).json({
+    trip_id,
+    ...etaResult,
+    geometry: corridor.geometry,
+    routeCoordinates: corridor.routeCoordinates
   });
-  return res.status(200).json({ trip_id, ...etaResult });
 });
 
 // GET /api/metrics (returns actual measured Historical Baseline vs ML vs Hybrid comparison)
@@ -219,7 +262,65 @@ app.get('/api/route-geometry', async (req, res) => {
 });
 
 
-// Replace your existing app.post('/api/trips/:id/location'...) with this:
+
+// In-memory Full Corridor Geometry Cache Store (Map<direction, { geometry, routeCoordinates }>)
+const corridorGeometryStore = new Map();
+
+// Helper: Fetches and caches full terminal-to-terminal corridor geometry
+async function getFullCorridorGeometry(direction = 'SEHORE_TO_VIT') {
+  if (corridorGeometryStore.has(direction)) {
+    return corridorGeometryStore.get(direction);
+  }
+
+  const waypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
+  const start = waypoints[0];
+  const end = waypoints[waypoints.length - 1];
+
+  const osrmData = await getOSRMRoute(start, end, direction);
+  if (osrmData && osrmData.routeCoordinates && osrmData.routeCoordinates.length > 0) {
+    const cachedData = {
+      geometry: osrmData.geometry,
+      routeCoordinates: osrmData.routeCoordinates
+    };
+    corridorGeometryStore.set(direction, cachedData);
+    return cachedData;
+  }
+
+  return { geometry: null, routeCoordinates: [] };
+}
+
+// Helper: Updates rolling position cache (last 2 tracked positions) and fetches snapped route coordinates
+async function getSnappedRoutePayload(trip_id, latitude, longitude, direction = 'SEHORE_TO_VIT') {
+  const activeWaypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
+  const destination = activeWaypoints[activeWaypoints.length - 1];
+
+  const history = tripHistoryStore.get(trip_id) || [];
+  history.push({ lat: latitude, lng: longitude });
+  if (history.length > 2) {
+    history.shift();
+  }
+  tripHistoryStore.set(trip_id, history);
+
+  const [osrmData, fullCorridor] = await Promise.all([
+    getOSRMRoute({ lat: latitude, lng: longitude }, destination),
+    getFullCorridorGeometry(direction)
+  ]);
+
+  const routeCoordinates = (fullCorridor && fullCorridor.routeCoordinates && fullCorridor.routeCoordinates.length > 0)
+    ? fullCorridor.routeCoordinates
+    : (osrmData?.routeCoordinates || []);
+
+  const distanceKm = osrmData && osrmData.distanceMeters 
+    ? parseFloat((osrmData.distanceMeters / 1000).toFixed(1)) 
+    : null;
+
+  return {
+    osrmGeometry: fullCorridor?.geometry || osrmData?.geometry || null,
+    routeCoordinates,
+    osrmDurationMinutes: osrmData ? osrmData.durationMinutes : null,
+    osrmDistanceKm: distanceKm
+  };
+}
 
 app.post('/api/trips/:id/location', (req, res) => {
   const trip_id = req.params.id;
@@ -266,26 +367,13 @@ app.post('/api/trips/:id/location', (req, res) => {
   const activeWaypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
   const destination = activeWaypoints[activeWaypoints.length - 1];
 
-  // 4. Calculate OSRM route from dynamic bus position to target terminal
-  getOSRMRoute({ lat: latitude, lng: longitude }, destination).then((osrmData) => {
-    const distanceKm = osrmData && osrmData.distanceMeters 
-      ? parseFloat((osrmData.distanceMeters / 1000).toFixed(1)) 
-      : null;
-
-    const routeCoordinates = osrmData?.routeCoordinates || (
-      osrmData?.geometry?.coordinates
-        ? osrmData.geometry.coordinates.map(([lng, lat]) => [lat, lng])
-        : []
-    );
-
+  // 4. Calculate OSRM route & snapped micro-coordinates from rolling history
+  getSnappedRoutePayload(trip_id, latitude, longitude, direction).then((routePayload) => {
     const updatedPayload = {
       ...updatedTripData,
       coordinates: [latitude, longitude],
       direction: updatedTripData.direction,
-      osrmGeometry: osrmData ? osrmData.geometry : null,
-      routeCoordinates,
-      osrmDurationMinutes: osrmData ? osrmData.durationMinutes : null,
-      osrmDistanceKm: distanceKm
+      ...routePayload
     };
 
     io.to(`trip:${trip_id}`).emit('trip:location-updated', updatedPayload);
@@ -308,6 +396,7 @@ app.post('/api/trips/:id/end', (req, res) => {
   const existed = activeTripsStore.has(trip_id);
 
   activeTripsStore.delete(trip_id);
+  tripHistoryStore.delete(trip_id);
 
   if (existed) {
     const endEvent = { trip_id, timestamp: new Date().toISOString() };
@@ -367,25 +456,12 @@ app.post('/api/traccar/webhook', (req, res) => {
   const activeWaypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
   const destination = activeWaypoints[activeWaypoints.length - 1];
 
-  getOSRMRoute({ lat: latitude, lng: longitude }, destination).then((osrmData) => {
-    const distanceKm = osrmData && osrmData.distanceMeters 
-      ? parseFloat((osrmData.distanceMeters / 1000).toFixed(1)) 
-      : null;
-
-    const routeCoordinates = osrmData?.routeCoordinates || (
-      osrmData?.geometry?.coordinates
-        ? osrmData.geometry.coordinates.map(([lng, lat]) => [lat, lng])
-        : []
-    );
-
+  getSnappedRoutePayload(trip_id, latitude, longitude, destination).then((routePayload) => {
     const updatedPayload = {
       ...updatedTripData,
       coordinates: [latitude, longitude],
       direction,
-      osrmGeometry: osrmData ? osrmData.geometry : null,
-      routeCoordinates,
-      osrmDurationMinutes: osrmData ? osrmData.durationMinutes : null,
-      osrmDistanceKm: distanceKm
+      ...routePayload
     };
 
     io.to(`trip:${trip_id}`).emit('trip:location-updated', updatedPayload);
@@ -439,39 +515,72 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('passenger:report-presence', ({ trip_id, passengerLat, passengerLng, clientId }) => {
+    if (!trip_id || typeof passengerLat !== 'number' || typeof passengerLng !== 'number') {
+      return;
+    }
+
+    const storedTrip = activeTripsStore.get(trip_id);
+    if (!storedTrip || typeof storedTrip.latitude !== 'number' || typeof storedTrip.longitude !== 'number') {
+      return;
+    }
+
+    // Straight-line distance calculation in meters (Haversine formula)
+    const R = 6371000;
+    const dLat = (passengerLat - storedTrip.latitude) * Math.PI / 180;
+    const dLon = (passengerLng - storedTrip.longitude) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(storedTrip.latitude * Math.PI / 180) * Math.cos(passengerLat * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const distanceMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    if (distanceMeters <= 100) {
+      const serverReceivedAt = Date.now();
+      const direction = storedTrip.direction || 'SEHORE_TO_VIT';
+
+      const updatedTripData = {
+        ...storedTrip,
+        latitude: passengerLat,
+        longitude: passengerLng,
+        source: 'crowd_verified',
+        verifiedByClient: clientId || socket.id,
+        serverReceivedAt
+      };
+
+      activeTripsStore.set(trip_id, updatedTripData);
+
+      const crowdSignalStatus = {
+        trip_id,
+        data_state: 'CROWD_VERIFIED',
+        last_ping_age_seconds: 0,
+        source: 'crowd_verified'
+      };
+
+      const activeWaypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
+      const destination = activeWaypoints[activeWaypoints.length - 1];
+
+      getSnappedRoutePayload(trip_id, passengerLat, passengerLng, destination).then((routePayload) => {
+        const updatedPayload = {
+          ...updatedTripData,
+          coordinates: [passengerLat, passengerLng],
+          direction,
+          data_state: 'CROWD_VERIFIED',
+          ...routePayload
+        };
+
+        io.to(`trip:${trip_id}`).emit('trip:location-updated', updatedPayload);
+        io.emit('trip:location-updated', updatedPayload);
+      });
+
+      io.to(`trip:${trip_id}`).emit('trip:signal-status-updated', crowdSignalStatus);
+      io.emit('trip:signal-status-updated', crowdSignalStatus);
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log(`[Socket.IO] Client disconnected: ${socket.id}`);
   });
 });
-
-app.all(['/api/ingest', '/'], (req, res) => {
-  // Grab query params or fallback to body
-  const raw = Object.keys(req.query).length ? req.query : req.body;
-  
-  if (raw && (raw.lat || raw.latitude)) {
-    const locationData = {
-      trip_id: raw.id || raw.deviceId || 'TRIP-101',
-      latitude: parseFloat(raw.lat || raw.latitude),
-      longitude: parseFloat(raw.lon || raw.longitude),
-      accuracy: parseFloat(raw.accuracy || 10),
-      timestamp: new Date().toISOString(),
-      source: 'conductor',
-      serverReceivedAt: Date.now()
-    };
-
-    // Store in active trips map
-    activeTripsStore.set(locationData.trip_id, locationData);
-
-    // Broadcast live update over Socket.IO to React Map
-    io.emit('trip:location-updated', locationData);
-    console.log('🚌 Live GPS Processed & Broadcasted:', locationData);
-  } else {
-    console.log('📡 Ingest ping received (no coordinates attached yet)');
-  }
-
-  res.status(200).send('OK');
-});
-
 
 if (!process.env.NODE_ENV || process.argv[1]?.endsWith('index.js') || process.argv[1]?.endsWith('index')) {
   httpServer.listen(PORT, '0.0.0.0', () => {
