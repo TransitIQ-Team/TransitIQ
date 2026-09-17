@@ -1,10 +1,24 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import axios from 'axios';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_FILE_PATH = path.join(__dirname, 'data', 'historicalTrips.json');
+
+const TERMINAL_COORDINATES = {
+  SEHORE: { lat: 23.2032, lng: 77.0844 },
+  VIT: { lat: 23.0776, lng: 76.8513 }
+};
+
+export function getDestinationCoords(direction) {
+  return direction === 'VIT_TO_SEHORE'
+    ? TERMINAL_COORDINATES.SEHORE
+    : TERMINAL_COORDINATES.VIT;
+}
+
+
 
 // Waypoint definitions for pilot routes
 export const PILOT_WAYPOINTS = {
@@ -24,6 +38,55 @@ export const PILOT_WAYPOINTS = {
     { name: "Sehore Bus Stand", lat: 23.200078, lng: 77.087906 }
   ]
 };
+
+// Fetch real-time dynamic route geometry and driving duration from OSRM
+export async function getOSRMRoute(start, end, direction = 'SEHORE_TO_VIT') {
+  const destination = end || getDestinationCoords(direction);
+  const url = `http://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) TransitIQ/1.0' }
+    });
+    if (response.data && response.data.routes && response.data.routes.length > 0) {
+      const route = response.data.routes[0];
+      const routeCoordinates = route.geometry?.coordinates
+        ? route.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+        : [];
+
+      return {
+        durationSeconds: route.duration,
+        durationMinutes: Math.round(route.duration / 60),
+        distanceMeters: route.distance,
+        geometry: route.geometry, // GeoJSON route line for map rendering
+        routeCoordinates
+      };
+    }
+  } catch (error) {
+    console.error("OSRM API Error, falling back to static/historical calculation:", error.message);
+  }
+  return null;
+}
+
+export async function matchCoordinatesToRoad(coordsArray) {
+  if (!coordsArray || coordsArray.length === 0) return null;
+  const coordinateString = coordsArray.map(c => `${c.lng},${c.lat}`).join(';');
+  const url = `http://router.project-osrm.org/match/v1/driving/${coordinateString}?overview=full&geometries=geojson&snapping=any`;
+  try {
+    const response = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) TransitIQ/1.0' }
+    });
+    if (response.data && response.data.matchings && response.data.matchings.length > 0) {
+      const match = response.data.matchings[0];
+      return match.geometry?.coordinates
+        ? match.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+        : [];
+    }
+  } catch (error) {
+    console.error("OSRM Match API Error:", error.message);
+  }
+  return null;
+}
 
 // Load historical trip records from structured repository file
 export function getHistoricalRecords() {
@@ -99,32 +162,40 @@ export function calculateHistoricalBaseline({ routeId = 'SH-VIT-01', direction, 
     return null; // Unavailable
   }
 
-  // Compute total duration for RELEVANT REMAINING SEGMENTS per trip
-  const remainingTripTotals = filtered.map(r => {
-    let sum = 0;
-    let validSegmentCount = 0;
-    requiredSegments.forEach(segKey => {
-      if (r.segment_durations_minutes && typeof r.segment_durations_minutes[segKey] === 'number') {
-        sum += r.segment_durations_minutes[segKey];
-        validSegmentCount += 1;
-      }
-    });
-    return validSegmentCount === requiredSegments.length ? sum : null;
-  }).filter(val => val !== null && val >= 0);
+  // Compute per-segment average, min, and max durations across filtered trips
+  let sumAvgEta = 0;
+  let sumMinEta = 0;
+  let sumMaxEta = 0;
+  let maxRecordCount = 0;
 
-  if (remainingTripTotals.length === 0) {
-    return null;
+  for (const segKey of requiredSegments) {
+    const validDurations = filtered
+      .map(r => r.segment_durations_minutes?.[segKey])
+      .filter(val => typeof val === 'number' && val >= 0);
+
+    if (validDurations.length === 0) {
+      return null;
+    }
+
+    const segAvg = validDurations.reduce((a, b) => a + b, 0) / validDurations.length;
+    const segMin = Math.min(...validDurations);
+    const segMax = Math.max(...validDurations);
+
+    sumAvgEta += segAvg;
+    sumMinEta += segMin;
+    sumMaxEta += segMax;
+    maxRecordCount = Math.max(maxRecordCount, validDurations.length);
   }
 
-  const avgEta = Math.round(remainingTripTotals.reduce((a, b) => a + b, 0) / remainingTripTotals.length);
-  const minEta = Math.min(...remainingTripTotals);
-  const maxEta = Math.max(...remainingTripTotals);
+  const avgEta = Math.round(sumAvgEta);
+  const minEta = Math.round(sumMinEta);
+  const maxEta = Math.round(sumMaxEta);
 
   return {
     etaMinutes: avgEta,
     minMinutes: Math.min(avgEta, minEta),
     maxMinutes: Math.max(avgEta, maxEta),
-    recordCount: remainingTripTotals.length,
+    recordCount: maxRecordCount,
     fallbackLevel
   };
 }
@@ -160,6 +231,8 @@ export function computeSignalAwareEta({ routeId = 'SH-VIT-01', storedTrip, signa
         data_state: 'NO_DATA',
         eta_minutes: null,
         eta_range: null,
+        minMinutes: null,
+        maxMinutes: null,
         confidence_level: 'Low',
         source: 'unavailable',
         explanation: 'No GPS location history or baseline records available'
@@ -171,6 +244,8 @@ export function computeSignalAwareEta({ routeId = 'SH-VIT-01', storedTrip, signa
       data_state: 'NO_DATA',
       eta_minutes: baseline.etaMinutes,
       eta_range: `${baseline.minMinutes}–${baseline.maxMinutes} min`,
+      minMinutes: baseline.minMinutes,
+      maxMinutes: baseline.maxMinutes,
       confidence_level: 'Low',
       source: 'historical_baseline',
       explanation: 'Scheduled historical baseline ETA (no active GPS session)'
@@ -194,6 +269,8 @@ export function computeSignalAwareEta({ routeId = 'SH-VIT-01', storedTrip, signa
       data_state,
       eta_minutes: null,
       eta_range: null,
+      minMinutes: null,
+      maxMinutes: null,
       confidence_level: 'Low',
       source: 'unavailable',
       explanation: 'Historical segment data unavailable'
@@ -206,6 +283,8 @@ export function computeSignalAwareEta({ routeId = 'SH-VIT-01', storedTrip, signa
       data_state: 'LIVE',
       eta_minutes: baseline.etaMinutes,
       eta_range: `${baseline.minMinutes}–${baseline.maxMinutes} min`,
+      minMinutes: baseline.minMinutes,
+      maxMinutes: baseline.maxMinutes,
       confidence_level: (baseline.fallbackLevel === 'exact_match' || baseline.fallbackLevel === 'route_direction_avg') ? 'High' : 'Medium',
       source: 'live_plus_historical',
       current_segment: segmentMatch.nearestWaypointName,
@@ -219,6 +298,8 @@ export function computeSignalAwareEta({ routeId = 'SH-VIT-01', storedTrip, signa
       data_state: 'PARTIAL',
       eta_minutes: baseline.etaMinutes,
       eta_range: `${Math.max(1, baseline.minMinutes - 2)}–${baseline.maxMinutes + 4} min`, // Slightly wider interval reflecting signal gap
+      minMinutes: Math.max(1, baseline.minMinutes - 2),
+      maxMinutes: baseline.maxMinutes + 4,
       explanation: 'Last known GPS position combined with historical segment estimate'
     };
   }
@@ -229,6 +310,8 @@ export function computeSignalAwareEta({ routeId = 'SH-VIT-01', storedTrip, signa
     data_state: 'HISTORICAL',
     eta_minutes: baseline.etaMinutes,
     eta_range: `${baseline.minMinutes}–${baseline.maxMinutes + 6} min`, // Expanded interval reflecting stale GPS
+    minMinutes: baseline.minMinutes,
+    maxMinutes: baseline.maxMinutes + 6,
     confidence_level: 'Low',
     source: 'historical_baseline',
     current_segment: segmentMatch.nearestWaypointName,
@@ -390,9 +473,28 @@ export async function computeHybridEta({ routeId = 'SH-VIT-01', storedTrip, sign
     confidenceLabel = 'Medium';
   }
 
-  const weightedEta = Math.round(mlWeight * mlResult.prediction_minutes + histWeight * historicalResult.eta_minutes);
-  const weightedLower = Math.max(1, Math.round(mlWeight * mlResult.lower_minutes + histWeight * (historicalResult.minMinutes || historicalResult.eta_minutes - 2)));
-  const weightedUpper = Math.max(weightedEta, Math.round(mlWeight * mlResult.upper_minutes + histWeight * (historicalResult.maxMinutes || historicalResult.eta_minutes + 2)));
+  const histEta = historicalResult?.eta_minutes;
+  if (histEta === null || histEta === undefined || typeof histEta !== 'number' || isNaN(histEta)) {
+    return {
+      route_id: routeId,
+      data_state: dataState,
+      eta_minutes: mlResult.prediction_minutes,
+      eta_range: mlResult.eta_range,
+      lower_minutes: mlResult.lower_minutes,
+      upper_minutes: mlResult.upper_minutes,
+      confidence_level: 'Medium',
+      source: 'hybrid',
+      hybrid_strategy: 'ml_only_baseline_unavailable',
+      explanation: 'Hybrid fallback to ML prediction (historical baseline unavailable)'
+    };
+  }
+
+  const histMin = historicalResult.minMinutes ?? (histEta - 2);
+  const histMax = historicalResult.maxMinutes ?? (histEta + 2);
+
+  const weightedEta = Math.round(mlWeight * mlResult.prediction_minutes + histWeight * histEta);
+  const weightedLower = Math.max(1, Math.round(mlWeight * mlResult.lower_minutes + histWeight * histMin));
+  const weightedUpper = Math.max(weightedEta, Math.round(mlWeight * mlResult.upper_minutes + histWeight * histMax));
 
   return {
     route_id: routeId,
