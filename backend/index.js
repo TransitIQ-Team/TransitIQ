@@ -3,12 +3,20 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics } from './etaService.js';
+import authRoutes from './authRoutes.js';
+import { initAuthService } from './authService.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+
+// Initialize demo users
+initAuthService().catch(err => console.error('[AuthService Init Error]', err));
+
+// Mount Authentication Router
+app.use('/api/v1/auth', authRoutes);
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {

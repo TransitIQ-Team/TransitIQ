@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
 import HomePage from './pages/HomePage';
 import DashboardPage from './pages/DashboardPage';
@@ -8,8 +10,10 @@ import RouteComparisonPage from './pages/RouteComparisonPage';
 import AboutPage from './pages/AboutPage';
 import ConductorPage from './pages/ConductorPage';
 import SimulatorPage from './pages/SimulatorPage';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
 
-export default function App() {
+function AppContent() {
   const [activeTab, setActiveTab] = useState('home');
   const [socketConnected, setSocketConnected] = useState(false);
   const [latestEvent, setLatestEvent] = useState(null);
@@ -44,16 +48,40 @@ export default function App() {
     switch (activeTab) {
       case 'home':
         return <HomePage setActiveTab={setActiveTab} />;
+      case 'login':
+        return <LoginPage setActiveTab={setActiveTab} />;
+      case 'register':
+        return <RegisterPage setActiveTab={setActiveTab} />;
       case 'dashboard':
-        return <DashboardPage />;
+        return (
+          <ProtectedRoute allowedRoles={['farmer', 'passenger', 'admin', 'officer', 'insurer', 'conductor']} setActiveTab={setActiveTab}>
+            <DashboardPage />
+          </ProtectedRoute>
+        );
       case 'conductor':
-        return <ConductorPage />;
+        return (
+          <ProtectedRoute allowedRoles={['officer', 'conductor', 'admin']} setActiveTab={setActiveTab}>
+            <ConductorPage />
+          </ProtectedRoute>
+        );
       case 'simulator':
-        return <SimulatorPage />;
+        return (
+          <ProtectedRoute allowedRoles={['officer', 'conductor', 'admin']} setActiveTab={setActiveTab}>
+            <SimulatorPage />
+          </ProtectedRoute>
+        );
       case 'insights':
-        return <InsightsPage />;
+        return (
+          <ProtectedRoute allowedRoles={['admin']} setActiveTab={setActiveTab}>
+            <InsightsPage />
+          </ProtectedRoute>
+        );
       case 'routes':
-        return <RouteComparisonPage />;
+        return (
+          <ProtectedRoute allowedRoles={['insurer', 'admin']} setActiveTab={setActiveTab}>
+            <RouteComparisonPage />
+          </ProtectedRoute>
+        );
       case 'about':
         return <AboutPage />;
       default:
@@ -87,5 +115,13 @@ export default function App() {
         </div>
       </footer>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
