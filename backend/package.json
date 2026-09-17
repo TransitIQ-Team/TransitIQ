@@ -4,11 +4,6 @@
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
-  "repository": {
-      "type": "git",
-      "url": "git+https://github.com/TransitIQ-team/TransitIQ.git"
-  },
-
   "scripts": {
     "start": "node index.js",
     "test": "node testSignalEvaluator.js && node testPhase4Eta.js"

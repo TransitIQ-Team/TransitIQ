@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Wifi, SignalLow, SignalZero, Sliders, AlertCircle, BarChart2 } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
-
 export default function DataAvailabilityControl({ missingLevel, setMissingLevel }) {
   const levels = ["0%", "25%", "50%", "75%", "100%"];
   const [experimentData, setExperimentData] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/research/missing-data`)
+    fetch('http://localhost:5000/api/research/missing-data')
       .then(res => res.json())
       .then(data => {
         if (data && data.levels) {

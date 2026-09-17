@@ -9,8 +9,6 @@ import AboutPage from './pages/AboutPage';
 import ConductorPage from './pages/ConductorPage';
 import SimulatorPage from './pages/SimulatorPage';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
-
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [socketConnected, setSocketConnected] = useState(false);
@@ -18,7 +16,7 @@ export default function App() {
 
   useEffect(() => {
     // Socket.IO passenger connection listener
-    const socket = io(API_URL, {
+    const socket = io('http://localhost:5000', {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       timeout: 3000
@@ -41,27 +39,27 @@ export default function App() {
       socket.disconnect();
     };
   }, []);
-  
-const renderActivePage = () => {
-  switch (activeTab) {
-    case 'home':
-      return <HomePage setActiveTab={setActiveTab} latestEvent={latestEvent} />;
-    case 'dashboard':
-      return <DashboardPage latestEvent={latestEvent} />;
-    case 'conductor':
-      return <ConductorPage />;
-    case 'simulator':
-      return <SimulatorPage />;
-    case 'insights':
-      return <InsightsPage />;
-    case 'routes':
-      return <RouteComparisonPage />;
-    case 'about':
-      return <AboutPage />;
-    default:
-      return <HomePage setActiveTab={setActiveTab} latestEvent={latestEvent} />;
-  }
-};
+
+  const renderActivePage = () => {
+    switch (activeTab) {
+      case 'home':
+        return <HomePage setActiveTab={setActiveTab} />;
+      case 'dashboard':
+        return <DashboardPage />;
+      case 'conductor':
+        return <ConductorPage />;
+      case 'simulator':
+        return <SimulatorPage />;
+      case 'insights':
+        return <InsightsPage />;
+      case 'routes':
+        return <RouteComparisonPage />;
+      case 'about':
+        return <AboutPage />;
+      default:
+        return <HomePage setActiveTab={setActiveTab} />;
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-teal-500 selection:text-white">
