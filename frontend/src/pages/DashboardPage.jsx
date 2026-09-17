@@ -297,6 +297,8 @@ export default function DashboardPage({ latestEvent }) {
   const activeRoadCoordsRef = React.useRef([]);
   const cumDistancesRef = React.useRef([]);
   const lastTargetIdxRef = React.useRef(0);
+  const lastPingTimeRef = React.useRef(null);
+  const targetIntervalRef = React.useRef(1.5);
 
   // Haversine distance in meters between two [lat, lng] points
   const haversineMeters = (p1, p2) => {
@@ -355,8 +357,18 @@ export default function DashboardPage({ latestEvent }) {
       visualDistanceRef.current = 0;
       targetDistanceRef.current = 0;
       lastTargetIdxRef.current = 0;
+      lastPingTimeRef.current = null;
       return;
     }
+
+    const now = performance.now();
+    if (lastPingTimeRef.current !== null) {
+      const elapsedSec = (now - lastPingTimeRef.current) / 1000;
+      if (elapsedSec > 0.3 && elapsedSec < 30) {
+        targetIntervalRef.current = elapsedSec;
+      }
+    }
+    lastPingTimeRef.current = now;
 
     const roadLayer = (activeRoadCoordsRef.current && activeRoadCoordsRef.current.length >= 2)
       ? activeRoadCoordsRef.current
@@ -370,9 +382,14 @@ export default function DashboardPage({ latestEvent }) {
 
     if (targetIdx >= lastTargetIdxRef.current && cumDist[targetIdx] !== undefined) {
       lastTargetIdxRef.current = targetIdx;
+      const newTargetDist = cumDist[targetIdx];
       // Monotonic update: target distance must never decrease
-      if (cumDist[targetIdx] > targetDistanceRef.current) {
-        targetDistanceRef.current = cumDist[targetIdx];
+      if (newTargetDist > targetDistanceRef.current) {
+        targetDistanceRef.current = newTargetDist;
+      }
+      // If initial positioning or major gap (> 2500m), snap visual position immediately
+      if (visualDistanceRef.current === 0 || (newTargetDist - visualDistanceRef.current > 2500)) {
+        visualDistanceRef.current = newTargetDist;
       }
     }
   }, [tripCoordinates?.[0], tripCoordinates?.[1]]);
@@ -382,6 +399,7 @@ export default function DashboardPage({ latestEvent }) {
     visualDistanceRef.current = 0;
     targetDistanceRef.current = 0;
     lastTargetIdxRef.current = 0;
+    lastPingTimeRef.current = null;
     setAnimatedTripCoords(null);
   }, [direction]);
 
@@ -410,7 +428,7 @@ export default function DashboardPage({ latestEvent }) {
     return coordsArray[coordsArray.length - 1];
   };
 
-  // Persistent Single requestAnimationFrame Loop (Constant Smooth Velocity)
+  // Persistent Single requestAnimationFrame Loop (Dynamic Adaptive Velocity)
   useEffect(() => {
     let running = true;
     let lastTime = performance.now();
@@ -435,8 +453,11 @@ export default function DashboardPage({ latestEvent }) {
 
       if (currentMeters < targetMeters) {
         const remaining = targetMeters - currentMeters;
-        // Constant smooth speed (~30 m/s / ~100 km/h) with subtle catchup factor, eliminating surging & deceleration spikes
-        const speedMetersPerSec = Math.max(25, Math.min(45, remaining / 1.2));
+        // Dynamically compute speed to smoothly traverse remaining distance over the expected ping interval
+        const expectedSec = Math.max(0.5, targetIntervalRef.current || 1.5);
+        const dynamicSpeed = remaining / expectedSec;
+        const speedMetersPerSec = Math.max(5, dynamicSpeed);
+
         const newDistance = Math.min(currentMeters + speedMetersPerSec * deltaSec, targetMeters);
 
         visualDistanceRef.current = newDistance;
@@ -445,8 +466,9 @@ export default function DashboardPage({ latestEvent }) {
         if (pos) {
           setAnimatedTripCoords(pos);
         }
-      } else if (targetMeters > 0 && currentMeters === 0) {
+      } else if (targetMeters > 0 && (currentMeters === 0 || animatedTripCoords === null)) {
         // Initial positioning
+        visualDistanceRef.current = targetMeters;
         const pos = getCoordinateAtDistance(roadLayer, cumDist, targetMeters);
         if (pos) {
           setAnimatedTripCoords(pos);
