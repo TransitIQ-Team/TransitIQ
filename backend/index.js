@@ -30,20 +30,37 @@ const io = new Server(httpServer, {
   }
 });
 
+// Controlled Demo Timetable Schedule
+const DEMO_SCHEDULE = {
+  'TRIP-101': {
+    trip_id: 'TRIP-101',
+    route_id: 'SEHORE_TO_VIT',
+    route_name: 'Sehore Bus Stand ↔ VIT Bhopal Outer Highway',
+    scheduled_departure: '10:30 AM',
+    baseline_duration: '~42 min'
+  }
+};
+
 // In-memory Live Position & Signal Evaluator Store
-// Map<trip_id, { trip_id, latitude, longitude, accuracy, timestamp, source, serverReceivedAt: number }>
+// Map<trip_id, { trip_id, latitude, longitude, accuracy, timestamp, source, service_state, serverReceivedAt: number }>
 const activeTripsStore = new Map();
 
 // In-memory Rolling Position Cache Store (last 2 tracked positions for map matching)
 // Map<trip_id, Array<{ lat: number, lng: number }>>
 const tripHistoryStore = new Map();
 
-// Helper: Evaluates signal data_state and age from server receipt timestamp
+// Helper: Evaluates signal data_state and age from server receipt timestamp alongside service_state
 export function evaluateSignalStatus(storedTrip, nowMs = Date.now()) {
+  const scheduleInfo = DEMO_SCHEDULE[storedTrip?.trip_id || 'TRIP-101'] || DEMO_SCHEDULE['TRIP-101'];
+
   if (!storedTrip || !storedTrip.serverReceivedAt) {
     return {
-      trip_id: storedTrip ? storedTrip.trip_id : null,
+      trip_id: storedTrip ? storedTrip.trip_id : 'TRIP-101',
+      service_state: storedTrip?.service_state || 'SCHEDULED',
+      telemetry_state: 'NONE',
       data_state: 'NO_DATA',
+      scheduled_departure: scheduleInfo.scheduled_departure,
+      baseline_duration: scheduleInfo.baseline_duration,
       last_ping_age_seconds: null,
       source: null
     };
@@ -60,9 +77,16 @@ export function evaluateSignalStatus(storedTrip, nowMs = Date.now()) {
     data_state = 'HISTORICAL';
   }
 
+  const telemetry_state = data_state; // 'LIVE', 'PARTIAL', or 'HISTORICAL'
+  const service_state = storedTrip.service_state || 'ACTIVE';
+
   return {
     trip_id: storedTrip.trip_id,
+    service_state,
+    telemetry_state,
     data_state,
+    scheduled_departure: scheduleInfo.scheduled_departure,
+    baseline_duration: scheduleInfo.baseline_duration,
     last_ping_age_seconds: ageSeconds,
     source: storedTrip.source
   };
@@ -83,13 +107,15 @@ app.all(['/api/ingest', '/'], (req, res, next) => {
   const raw = Object.keys(req.query).length ? req.query : req.body;
   
   if (raw && (raw.lat || raw.latitude)) {
+    const trip_id = raw.id || raw.deviceId || 'TRIP-101';
     const locationData = {
-      trip_id: raw.id || raw.deviceId || 'TRIP-101',
+      trip_id,
       latitude: parseFloat(raw.lat || raw.latitude),
       longitude: parseFloat(raw.lon || raw.longitude),
       accuracy: parseFloat(raw.accuracy || 10),
       timestamp: new Date().toISOString(),
       source: 'conductor',
+      service_state: 'ACTIVE',
       serverReceivedAt: Date.now()
     };
 
@@ -136,16 +162,6 @@ app.get('/api/health', (req, res) => {
 app.get('/api/trips/:id/signal-status', (req, res) => {
   const trip_id = req.params.id;
   const storedTrip = activeTripsStore.get(trip_id);
-
-  if (!storedTrip) {
-    return res.status(200).json({
-      trip_id,
-      data_state: 'NO_DATA',
-      last_ping_age_seconds: null,
-      source: null
-    });
-  }
-
   const status = evaluateSignalStatus(storedTrip);
   return res.status(200).json(status);
 });
@@ -162,17 +178,34 @@ app.get('/api/routes/:id/eta', async (req, res) => {
   const storedTrip = activeTripsStore.get(targetTripId);
   const signalStatus = evaluateSignalStatus(storedTrip);
 
-  const etaResponse = computeSignalAwareEta({
+  let etaResponse = computeSignalAwareEta({
     storedTrip,
     signalStatus,
     direction: targetDirection,
     targetStop: targetStopName
   });
 
+  if (signalStatus.service_state === 'SCHEDULED') {
+    etaResponse = {
+      ...etaResponse,
+      eta_minutes: null,
+      eta_range: null,
+      minMinutes: null,
+      maxMinutes: null,
+      confidence_level: null,
+      source: 'timetable_schedule',
+      explanation: 'Scheduled timetable entry (live tracking starts when vehicle departs)'
+    };
+  }
+
   const corridor = await getFullCorridorGeometry(targetDirection);
 
   return res.status(200).json({
     ...etaResponse,
+    service_state: signalStatus.service_state,
+    telemetry_state: signalStatus.telemetry_state,
+    scheduled_departure: signalStatus.scheduled_departure,
+    baseline_duration: signalStatus.baseline_duration,
     geometry: corridor.geometry,
     routeCoordinates: corridor.routeCoordinates
   });
@@ -214,8 +247,26 @@ app.get('/api/trips/:id/eta', async (req, res) => {
     });
   }
 
+  // Targeted Narrow Guard: For SCHEDULED + NONE state, return null ETA prediction and source: timetable_schedule
+  if (signalStatus.service_state === 'SCHEDULED') {
+    etaResult = {
+      ...etaResult,
+      eta_minutes: null,
+      eta_range: null,
+      minMinutes: null,
+      maxMinutes: null,
+      confidence_level: null,
+      source: 'timetable_schedule',
+      explanation: 'Scheduled timetable entry (live tracking starts when vehicle departs)'
+    };
+  }
+
   return res.status(200).json({
     trip_id,
+    service_state: signalStatus.service_state,
+    telemetry_state: signalStatus.telemetry_state,
+    scheduled_departure: signalStatus.scheduled_departure,
+    baseline_duration: signalStatus.baseline_duration,
     ...etaResult,
     geometry: corridor.geometry,
     routeCoordinates: corridor.routeCoordinates
@@ -266,8 +317,6 @@ app.get('/api/route-geometry', async (req, res) => {
     message: 'Could not fetch route geometry from OSRM' 
   });
 });
-
-
 
 // In-memory Full Corridor Geometry Cache Store (Map<direction, { geometry, routeCoordinates }>)
 const corridorGeometryStore = new Map();
@@ -330,7 +379,6 @@ async function getSnappedRoutePayload(trip_id, latitude, longitude, direction = 
 
 app.post('/api/trips/:id/location', (req, res) => {
   const trip_id = req.params.id;
-  // 1. Extract direction from body (defaults to 'SEHORE_TO_VIT')
   const { latitude, longitude, accuracy, timestamp, source, direction: bodyDirection } = req.body;
   const direction = bodyDirection === undefined ? 'SEHORE_TO_VIT' : bodyDirection;
   const serverReceivedAt = Date.now();
@@ -353,7 +401,6 @@ app.post('/api/trips/:id/location', (req, res) => {
 
   const normalizedTimestamp = new Date(timestamp).toISOString();
 
-  // 2. Store direction alongside location data
   const updatedTripData = {
     trip_id,
     latitude,
@@ -362,6 +409,7 @@ app.post('/api/trips/:id/location', (req, res) => {
     direction,
     timestamp: normalizedTimestamp,
     source,
+    service_state: 'ACTIVE',
     serverReceivedAt
   };
 
@@ -369,16 +417,14 @@ app.post('/api/trips/:id/location', (req, res) => {
 
   const signalStatus = evaluateSignalStatus(updatedTripData, serverReceivedAt);
 
-  // 3. Dynamically resolve destination based on active direction
-  const activeWaypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
-  const destination = activeWaypoints[activeWaypoints.length - 1];
-
-  // 4. Calculate OSRM route & snapped micro-coordinates from rolling history
   getSnappedRoutePayload(trip_id, latitude, longitude, direction).then((routePayload) => {
     const updatedPayload = {
       ...updatedTripData,
       coordinates: [latitude, longitude],
       direction: updatedTripData.direction,
+      service_state: 'ACTIVE',
+      telemetry_state: signalStatus.telemetry_state,
+      data_state: signalStatus.data_state,
       ...routePayload
     };
 
@@ -405,7 +451,7 @@ app.post('/api/trips/:id/end', (req, res) => {
   tripHistoryStore.delete(trip_id);
 
   if (existed) {
-    const endEvent = { trip_id, timestamp: new Date().toISOString() };
+    const endEvent = { trip_id, service_state: 'COMPLETED', telemetry_state: 'NONE', timestamp: new Date().toISOString() };
     io.to(`trip:${trip_id}`).emit('trip:ended', endEvent);
     io.emit('trip:ended', endEvent);
   }
@@ -453,6 +499,7 @@ app.post('/api/traccar/webhook', (req, res) => {
     direction,
     timestamp: new Date(fixTime).toISOString(),
     source: 'traccar',
+    service_state: 'ACTIVE',
     serverReceivedAt
   };
 
@@ -467,6 +514,9 @@ app.post('/api/traccar/webhook', (req, res) => {
       ...updatedTripData,
       coordinates: [latitude, longitude],
       direction,
+      service_state: 'ACTIVE',
+      telemetry_state: signalStatus.telemetry_state,
+      data_state: signalStatus.data_state,
       ...routePayload
     };
 
@@ -502,11 +552,14 @@ io.on('connection', (socket) => {
           coordinates,
           accuracy: stored.accuracy,
           timestamp: stored.timestamp,
-          source: stored.source
+          source: stored.source,
+          service_state: stored.service_state || 'ACTIVE'
         });
         socket.emit('trip:signal-status-updated', evaluateSignalStatus(stored));
+      } else {
+        socket.emit('trip:signal-status-updated', evaluateSignalStatus(null));
       }
-      //send baseline route geometry to newly connected map
+      // send baseline route geometry to newly connected map
       const defaultWaypoints = PILOT_WAYPOINTS.SEHORE_TO_VIT;
       getOSRMRoute(defaultWaypoints[0], defaultWaypoints[defaultWaypoints.length - 1]).then((osrmData) => {
         if (osrmData) {
@@ -531,7 +584,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Straight-line distance calculation in meters (Haversine formula)
     const R = 6371000;
     const dLat = (passengerLat - storedTrip.latitude) * Math.PI / 180;
     const dLon = (passengerLng - storedTrip.longitude) * Math.PI / 180;
@@ -549,6 +601,7 @@ io.on('connection', (socket) => {
         latitude: passengerLat,
         longitude: passengerLng,
         source: 'crowd_verified',
+        service_state: 'ACTIVE',
         verifiedByClient: clientId || socket.id,
         serverReceivedAt
       };
@@ -557,6 +610,8 @@ io.on('connection', (socket) => {
 
       const crowdSignalStatus = {
         trip_id,
+        service_state: 'ACTIVE',
+        telemetry_state: 'LIVE',
         data_state: 'CROWD_VERIFIED',
         last_ping_age_seconds: 0,
         source: 'crowd_verified'
@@ -570,6 +625,8 @@ io.on('connection', (socket) => {
           ...updatedTripData,
           coordinates: [passengerLat, passengerLng],
           direction,
+          service_state: 'ACTIVE',
+          telemetry_state: 'LIVE',
           data_state: 'CROWD_VERIFIED',
           ...routePayload
         };

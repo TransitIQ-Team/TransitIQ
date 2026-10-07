@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
-import { Bus, MapPin, Search, ArrowRightLeft, Clock, Wifi, SignalLow, SignalZero, Navigation, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { Bus, MapPin, Search, ArrowRightLeft, Clock, Wifi, SignalLow, SignalZero, Navigation, ShieldCheck, AlertCircle, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -73,6 +73,8 @@ export default function DashboardPage({ latestEvent }) {
   const [socketTripCoords, setSocketTripCoords] = useState(null);
   const [socketRouteCoords, setSocketRouteCoords] = useState([]);
   const [liveDataState, setLiveDataState] = useState(null);
+  const [liveServiceState, setLiveServiceState] = useState(null);
+  const [liveTelemetryState, setLiveTelemetryState] = useState(null);
   const socketRef = useRef(null);
 
   useEffect(() => {
@@ -101,14 +103,18 @@ export default function DashboardPage({ latestEvent }) {
     });
 
     socket.on('trip:signal-status-updated', (status) => {
-      if (status && status.data_state) {
-        setLiveDataState(status.data_state);
+      if (status) {
+        if (status.data_state) setLiveDataState(status.data_state);
+        if (status.service_state) setLiveServiceState(status.service_state);
+        if (status.telemetry_state) setLiveTelemetryState(status.telemetry_state);
       }
     });
 
     socket.on('trip:location-updated', (data) => {
-      if (data && data.data_state) {
-        setLiveDataState(data.data_state);
+      if (data) {
+        if (data.data_state) setLiveDataState(data.data_state);
+        if (data.service_state) setLiveServiceState(data.service_state);
+        if (data.telemetry_state) setLiveTelemetryState(data.telemetry_state);
       }
       const tripCoordinates = (data?.latitude != null && data?.longitude != null)
         ? [data.latitude, data.longitude]
@@ -155,6 +161,10 @@ export default function DashboardPage({ latestEvent }) {
 
   useEffect(() => {
     if (!latestEvent) return;
+
+    if (latestEvent.data_state) setLiveDataState(latestEvent.data_state);
+    if (latestEvent.service_state) setLiveServiceState(latestEvent.service_state);
+    if (latestEvent.telemetry_state) setLiveTelemetryState(latestEvent.telemetry_state);
 
     const tripCoordinates = (latestEvent?.latitude != null && latestEvent?.longitude != null)
       ? [latestEvent.latitude, latestEvent.longitude]
@@ -207,40 +217,78 @@ export default function DashboardPage({ latestEvent }) {
     }
   };
 
-  const getSignalBadge = (state) => {
+  // 1. Service State Display Helper
+  const getServiceBadge = (state) => {
     switch (state) {
+      case 'ACTIVE':
+        return {
+          shortLabel: '● EN ROUTE',
+          title: 'Service En Route',
+          color: 'bg-emerald-50 text-emerald-800 border-emerald-300',
+          dotColor: 'bg-emerald-500'
+        };
+      case 'COMPLETED':
+        return {
+          shortLabel: '✓ COMPLETED',
+          title: 'Trip Completed',
+          color: 'bg-slate-100 text-slate-800 border-slate-300',
+          dotColor: 'bg-slate-500'
+        };
+      case 'CANCELLED':
+        return {
+          shortLabel: '✕ CANCELLED',
+          title: 'Service Cancelled',
+          color: 'bg-rose-50 text-rose-800 border-rose-300',
+          dotColor: 'bg-rose-500'
+        };
+      case 'SCHEDULED':
+      default:
+        return {
+          shortLabel: '○ SCHEDULED',
+          title: 'Scheduled Service',
+          color: 'bg-sky-50 text-sky-800 border-sky-300',
+          dotColor: 'bg-sky-500'
+        };
+    }
+  };
+
+  // 2. Tracking State Display Helper
+  const getTrackingBadge = (tState, dState) => {
+    const effectiveState = tState || (dState === 'NO_DATA' ? 'NONE' : dState) || 'NONE';
+    switch (effectiveState) {
       case 'LIVE':
         return {
           shortLabel: 'LIVE GPS',
-          title: 'Live GPS Signal Active',
-          desc: 'ETA updated in real time from bus location.',
+          title: 'Live GPS Active',
+          desc: 'ETA updated in real time from live bus coordinates.',
           color: 'bg-emerald-50 text-emerald-800 border-emerald-300',
           dotColor: 'bg-emerald-500',
           icon: Wifi
         };
       case 'PARTIAL':
         return {
-          shortLabel: 'PARTIAL SIGNAL',
-          title: 'Intermittent Signal',
-          desc: 'Blending live GPS updates with corridor velocity profile.',
+          shortLabel: 'LIMITED SIGNAL',
+          title: 'Intermittent GPS Signal',
+          desc: 'Blending live GPS updates with corridor velocity pattern.',
           color: 'bg-amber-50 text-amber-800 border-amber-300',
           dotColor: 'bg-amber-500',
           icon: SignalLow
         };
       case 'HISTORICAL':
         return {
-          shortLabel: 'HISTORICAL / ESTIMATED',
-          title: 'Estimated from History',
-          desc: 'GPS signal offline. Prediction generated using past trips.',
+          shortLabel: 'SIGNAL UNAVAILABLE',
+          title: 'Signal Unavailable (GPS Offline)',
+          desc: 'Pattern-based estimate calculated from past corridor trips.',
           color: 'bg-slate-100 text-slate-800 border-slate-300',
           dotColor: 'bg-slate-500',
           icon: SignalZero
         };
+      case 'NONE':
       default:
         return {
-          shortLabel: 'NO LIVE DATA',
-          title: 'No Live Data Available',
-          desc: 'Displaying estimated corridor timetable schedule.',
+          shortLabel: 'NO LIVE SIGNAL YET',
+          title: 'No Live Signal Recorded',
+          desc: 'Displaying baseline timetable schedule duration.',
           color: 'bg-slate-100 text-slate-700 border-slate-200',
           dotColor: 'bg-slate-400',
           icon: SignalZero
@@ -248,9 +296,14 @@ export default function DashboardPage({ latestEvent }) {
     }
   };
 
-  const activeDataState = liveDataState || (etaData ? etaData.data_state : 'NO_DATA');
-  const badge = getSignalBadge(activeDataState);
-  const BadgeIcon = badge.icon;
+  const activeServiceState = liveServiceState || etaData?.service_state || 'SCHEDULED';
+  const rawDataState = liveDataState || etaData?.data_state || 'NO_DATA';
+  const activeTelemetryState = liveTelemetryState || etaData?.telemetry_state || (rawDataState === 'NO_DATA' ? 'NONE' : rawDataState);
+
+  const serviceBadge = getServiceBadge(activeServiceState);
+  const trackingBadge = getTrackingBadge(activeTelemetryState, rawDataState);
+  const TrackingIcon = trackingBadge.icon;
+
   const tripData = etaData?.tripData || etaData?.trip || etaData;
   const fallbackTripCoords = (tripData?.latitude != null && tripData?.longitude != null)
     ? [tripData.latitude, tripData.longitude]
@@ -475,13 +528,20 @@ export default function DashboardPage({ latestEvent }) {
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Signal Badge */}
-          <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border ${badge.color}`}>
-            <span className={`w-2 h-2 rounded-full ${badge.dotColor} animate-pulse`}></span>
-            <BadgeIcon className="w-4 h-4 shrink-0" />
-            <span>{badge.shortLabel}</span>
+        {/* Dual Badges: Service State + Tracking State */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Service Status Badge */}
+          <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${serviceBadge.color}`}>
+            <span className={`w-2 h-2 rounded-full ${serviceBadge.dotColor}`}></span>
+            <span>SERVICE: {serviceBadge.shortLabel}</span>
           </div>
+
+          {/* Tracking Status Badge */}
+          <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${trackingBadge.color}`}>
+            <TrackingIcon className="w-3.5 h-3.5 shrink-0" />
+            <span>TRACKING: {trackingBadge.shortLabel}</span>
+          </div>
+
           <button
             onClick={fetchLiveEta}
             disabled={loading}
@@ -528,37 +588,72 @@ export default function DashboardPage({ latestEvent }) {
             </div>
           </div>
 
-          {/* Primary ETA Display Card */}
+          {/* Primary Display Card: Scheduled vs Live Arrival */}
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Arrival Estimate</span>
-              <span className="text-[11px] font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                {etaData ? (etaData.confidence_level || 'Good Confidence') : 'Calculating'}
-              </span>
-            </div>
+            {activeServiceState === 'SCHEDULED' ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Scheduled Service</span>
+                  <span className="text-[11px] font-semibold text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                    Timetable Entry
+                  </span>
+                </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center">
-              <span className="text-xs font-semibold text-slate-500 block mb-1">Bus Will Arrive In</span>
-              <div className="text-5xl font-extrabold text-slate-900 flex items-baseline justify-center gap-1.5">
-                <span>{etaData && etaData.eta_minutes !== null ? etaData.eta_minutes : '--'}</span>
-                <span className="text-lg font-bold text-teal-600">min</span>
-              </div>
-              <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-slate-200 text-xs font-medium text-slate-700">
-                <Clock className="w-3.5 h-3.5 text-teal-600" />
-                <span>Window: {etaData && etaData.eta_range ? etaData.eta_range : '--'}</span>
-              </div>
-            </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center">
+                  <span className="text-xs font-semibold text-slate-500 block mb-1">Scheduled Departure Time</span>
+                  <div className="text-4xl font-extrabold text-slate-900 flex items-baseline justify-center gap-1.5">
+                    <span>10:30</span>
+                    <span className="text-lg font-bold text-sky-600">AM</span>
+                  </div>
+                  <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-slate-200 text-xs font-medium text-slate-700">
+                    <Clock className="w-3.5 h-3.5 text-sky-600" />
+                    <span>Baseline Corridor Duration: ~42 min</span>
+                  </div>
+                </div>
 
-            {/* Signal State Transparency Description */}
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1">
-              <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                <BadgeIcon className="w-4 h-4 text-teal-600 shrink-0" />
-                <span>{badge.title}</span>
-              </div>
-              <p className="text-[11px] leading-relaxed text-slate-500 pl-5">
-                {badge.desc}
-              </p>
-            </div>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1">
+                  <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-sky-600 shrink-0" />
+                    <span>Service Confirmed on Schedule</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-slate-500 pl-5">
+                    This trip is published on the corridor timetable. Live tracking and real-time ETAs will activate automatically when the driver starts the journey.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Arrival Estimate</span>
+                  <span className="text-[11px] font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                    {etaData ? (etaData.confidence_level || 'Good Confidence') : 'Calculating'}
+                  </span>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center">
+                  <span className="text-xs font-semibold text-slate-500 block mb-1">Bus Will Arrive In</span>
+                  <div className="text-5xl font-extrabold text-slate-900 flex items-baseline justify-center gap-1.5">
+                    <span>{etaData && etaData.eta_minutes !== null ? etaData.eta_minutes : '--'}</span>
+                    <span className="text-lg font-bold text-teal-600">min</span>
+                  </div>
+                  <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-slate-200 text-xs font-medium text-slate-700">
+                    <Clock className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Window: {etaData && etaData.eta_range ? etaData.eta_range : '--'}</span>
+                  </div>
+                </div>
+
+                {/* Tracking State Transparency Description */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1">
+                  <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                    <TrackingIcon className="w-4 h-4 text-teal-600 shrink-0" />
+                    <span>{trackingBadge.title}</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-slate-500 pl-5">
+                    {trackingBadge.desc}
+                  </p>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Upcoming Stop Progression */}
@@ -601,7 +696,7 @@ export default function DashboardPage({ latestEvent }) {
                 <span className="text-xs font-bold text-slate-800">Live Map View</span>
               </div>
               <span className="text-[11px] text-slate-500 font-medium">
-                Current Segment: {etaData && etaData.current_segment ? etaData.current_segment : 'En route on corridor'}
+                Current Segment: {etaData && etaData.current_segment ? etaData.current_segment : (activeServiceState === 'SCHEDULED' ? 'Scheduled Origin Station' : 'En route on corridor')}
               </span>
             </div>
 
@@ -643,8 +738,8 @@ export default function DashboardPage({ latestEvent }) {
                   </CircleMarker>
                 ))}
 
-                {/* Animated Bus Location Marker */}
-                {Array.isArray(animatedTripCoords || tripCoordinates) && (
+                {/* Animated Bus Location Marker (only when position is known) */}
+                {Array.isArray(animatedTripCoords || tripCoordinates) && activeServiceState === 'ACTIVE' && (
                   <Marker
                     position={animatedTripCoords || tripCoordinates}
                     icon={busMarkerIcon}
@@ -652,7 +747,8 @@ export default function DashboardPage({ latestEvent }) {
                     <Popup>
                       <div className="text-xs">
                         <div className="font-bold text-teal-700">TransitIQ Bus (TRIP-101)</div>
-                        <div className="text-slate-600 mt-0.5">Signal State: {badge.shortLabel}</div>
+                        <div className="text-slate-600 mt-0.5">Service: {serviceBadge.shortLabel}</div>
+                        <div className="text-slate-600">Tracking: {trackingBadge.shortLabel}</div>
                       </div>
                     </Popup>
                   </Marker>
