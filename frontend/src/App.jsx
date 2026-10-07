@@ -8,11 +8,50 @@ import RouteComparisonPage from './pages/RouteComparisonPage';
 import AboutPage from './pages/AboutPage';
 import ConductorPage from './pages/ConductorPage';
 import SimulatorPage from './pages/SimulatorPage';
+import LoginPage from './pages/LoginPage';
+
+const ROLE_CONFIG = {
+  Passenger: {
+    landing: 'home',
+    allowedTabs: ['home', 'dashboard', 'routes', 'about']
+  },
+  Conductor: {
+    landing: 'conductor',
+    allowedTabs: ['dashboard', 'routes', 'conductor', 'simulator', 'about']
+  },
+  Admin: {
+    landing: 'insights',
+    allowedTabs: ['home', 'dashboard', 'routes', 'insights', 'simulator', 'about']
+  },
+  Guest: {
+    landing: 'home',
+    allowedTabs: ['home', 'dashboard', 'routes', 'simulator', 'about', 'login']
+  }
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home');
   const [socketConnected, setSocketConnected] = useState(false);
   const [latestEvent, setLatestEvent] = useState(null);
+
+  const [user, setUser] = useState(() => {
+    try {
+      const savedUser = localStorage.getItem('transitiq_user');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch (e) {
+      console.error('Failed to parse saved user from localStorage:', e);
+      return null;
+    }
+  });
+
+  const currentRoleConfig = ROLE_CONFIG[user?.role] || ROLE_CONFIG.Guest;
+
+  // Route protection: If activeTab is not allowed for the current role, redirect to role landing page
+  useEffect(() => {
+    if (!currentRoleConfig.allowedTabs.includes(activeTab)) {
+      setActiveTab(currentRoleConfig.landing);
+    }
+  }, [user, activeTab, currentRoleConfig]);
 
   useEffect(() => {
     // Socket.IO passenger connection listener
@@ -40,7 +79,39 @@ export default function App() {
     };
   }, []);
 
+  const handleLoginSuccess = (userSession) => {
+    setUser(userSession);
+    try {
+      localStorage.setItem('transitiq_user', JSON.stringify(userSession));
+    } catch (e) {
+      console.error('Failed to save user session to localStorage:', e);
+    }
+    const config = ROLE_CONFIG[userSession.role] || ROLE_CONFIG.Guest;
+    setActiveTab(config.landing);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    try {
+      localStorage.removeItem('transitiq_user');
+    } catch (e) {
+      console.error('Failed to clear user session from localStorage:', e);
+    }
+    setActiveTab('home');
+  };
+
   const renderActivePage = () => {
+    // Safety fallback: if not allowed, render landing page
+    if (!currentRoleConfig.allowedTabs.includes(activeTab)) {
+      const LandingComponent = {
+        home: HomePage,
+        conductor: ConductorPage,
+        insights: InsightsPage
+      }[currentRoleConfig.landing] || HomePage;
+
+      return <LandingComponent setActiveTab={setActiveTab} />;
+    }
+
     switch (activeTab) {
       case 'home':
         return <HomePage setActiveTab={setActiveTab} />;
@@ -56,6 +127,8 @@ export default function App() {
         return <RouteComparisonPage />;
       case 'about':
         return <AboutPage />;
+      case 'login':
+        return user ? <HomePage setActiveTab={setActiveTab} /> : <LoginPage onLoginSuccess={handleLoginSuccess} />;
       default:
         return <HomePage setActiveTab={setActiveTab} />;
     }
@@ -68,6 +141,8 @@ export default function App() {
         setActiveTab={setActiveTab}
         socketConnected={socketConnected}
         latestEvent={latestEvent}
+        user={user}
+        onLogout={handleLogout}
       />
       
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
