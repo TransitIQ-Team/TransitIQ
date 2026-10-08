@@ -5,7 +5,7 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics, getOSRMRoute, matchCoordinatesToRoad, PILOT_WAYPOINTS } from './etaService.js';
+import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics, getOSRMRoute, matchCoordinatesToRoad, PILOT_WAYPOINTS, getPilotCorridorData } from './etaService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -140,12 +140,22 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: [
       'GET /api/health',
+      'GET /api/routes',
       'GET /api/trips/:id/signal-status',
       'GET /api/routes/:id/eta',
       'POST /api/routes/:id/eta',
       'POST /api/trips/:id/position'
     ]
   });
+});
+
+// GET /api/routes - Canonical static route & stop metadata endpoint
+app.get('/api/routes', (req, res) => {
+  const data = getPilotCorridorData();
+  if (data) {
+    return res.status(200).json({ success: true, ...data });
+  }
+  return res.status(500).json({ success: false, message: 'Could not load pilot corridor route data' });
 });
 
 // GET /api/health

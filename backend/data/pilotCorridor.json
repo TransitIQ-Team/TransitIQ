@@ -1,0 +1,84 @@
+{
+  "routes": [
+    {
+      "route_id": "SEHORE_TO_VIT",
+      "name": "Sehore Bus Stand ↔ VIT Bhopal Outer Highway",
+      "origin": "Sehore Bus Stand",
+      "destination": "VIT Bhopal Outer Highway"
+    }
+  ],
+  "stops": [
+    {
+      "stop_id": "STOP-001",
+      "name": "Sehore Bus Stand",
+      "latitude": 23.200078,
+      "longitude": 77.087906
+    },
+    {
+      "stop_id": "STOP-002",
+      "name": "Kubreshwar Dham",
+      "latitude": 23.164298,
+      "longitude": 77.005836,
+      "return_latitude": 23.164486,
+      "return_longitude": 77.0057
+    },
+    {
+      "stop_id": "STOP-003",
+      "name": "Amlaha",
+      "latitude": 23.118575,
+      "longitude": 76.903982
+    },
+    {
+      "stop_id": "STOP-004",
+      "name": "Toll Plaza",
+      "latitude": 23.102305,
+      "longitude": 76.875963
+    },
+    {
+      "stop_id": "STOP-005",
+      "name": "VIT Bhopal Outer Highway",
+      "latitude": 23.081236,
+      "longitude": 76.842881,
+      "return_latitude": 23.081345,
+      "return_longitude": 76.842785
+    },
+    {
+      "stop_id": "STOP-006",
+      "name": "Indore Naka",
+      "latitude": 23.193541,
+      "longitude": 77.073072
+    },
+    {
+      "stop_id": "STOP-007",
+      "name": "Nadi/Hospital Chauraha",
+      "latitude": 23.197895,
+      "longitude": 77.081507
+    }
+  ],
+  "directions": {
+    "SEHORE_TO_VIT": [
+      { "stop_id": "STOP-001", "name": "Sehore Bus Stand", "lat": 23.200078, "lng": 77.087906 },
+      { "stop_id": "STOP-002", "name": "Kubreshwar Dham", "lat": 23.164298, "lng": 77.005836 },
+      { "stop_id": "STOP-003", "name": "Amlaha", "lat": 23.118575, "lng": 76.903982 },
+      { "stop_id": "STOP-004", "name": "Toll Plaza", "lat": 23.102305, "lng": 76.875963 },
+      { "stop_id": "STOP-005", "name": "VIT Bhopal Outer Highway", "lat": 23.081236, "lng": 76.842881 }
+    ],
+    "VIT_TO_SEHORE": [
+      { "stop_id": "STOP-005", "name": "VIT Bhopal Outer Highway", "lat": 23.081345, "lng": 76.842785 },
+      { "stop_id": "STOP-003", "name": "Amlaha", "lat": 23.118575, "lng": 76.903982 },
+      { "stop_id": "STOP-002", "name": "Kubreshwar Dham", "lat": 23.164486, "lng": 77.0057 },
+      { "stop_id": "STOP-006", "name": "Indore Naka", "lat": 23.193541, "lng": 77.073072 },
+      { "stop_id": "STOP-007", "name": "Nadi/Hospital Chauraha", "lat": 23.197895, "lng": 77.081507 },
+      { "stop_id": "STOP-001", "name": "Sehore Bus Stand", "lat": 23.200078, "lng": 77.087906 }
+    ]
+  },
+  "scheduledTrips": [
+    {
+      "trip_id": "TRIP-101",
+      "route_id": "SEHORE_TO_VIT",
+      "route_name": "Sehore Bus Stand ↔ VIT Bhopal Outer Highway",
+      "scheduled_departure": "10:30 AM",
+      "baseline_duration": "~42 min"
+    }
+  ]
+}

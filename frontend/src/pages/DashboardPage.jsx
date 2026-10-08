@@ -92,7 +92,25 @@ export default function DashboardPage({ latestEvent }) {
   const [passengerCoords, setPassengerCoords] = useState(null);
   const [locationStatus, setLocationStatus] = useState('NOT_REQUESTED');
   const [locationErrorMessage, setLocationErrorMessage] = useState('');
+  const [canonicalCorridor, setCanonicalCorridor] = useState(null);
   const socketRef = useRef(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetch(`${API_URL}/api/routes`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (isMounted && data.success) {
+          setCanonicalCorridor(data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not fetch canonical route metadata, using local fallback:', err);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleRequestLocation = () => {
     if (!navigator.geolocation) {
@@ -366,13 +384,23 @@ export default function DashboardPage({ latestEvent }) {
     ? rawEtaGeometry.coordinates.map(([lng, lat]) => [lat, lng])
     : (Array.isArray(rawEtaGeometry) ? rawEtaGeometry.map(pt => Array.isArray(pt) ? (pt.length >= 2 ? [pt[0], pt[1]] : pt) : [pt.lat, pt.lng]) : []);
 
-  const staticHighwayCoords = STATIC_WAYPOINTS[direction] || STATIC_WAYPOINTS.SEHORE_TO_VIT;
+  const staticHighwayCoords = (canonicalCorridor?.directions?.[direction])
+    ? canonicalCorridor.directions[direction].map(wp => [wp.lat, wp.lng])
+    : (STATIC_WAYPOINTS[direction] || STATIC_WAYPOINTS.SEHORE_TO_VIT);
+
   const activeRoadCoords = (socketRouteCoords && socketRouteCoords.length >= 2)
     ? socketRouteCoords
     : ((fallbackRouteCoords && fallbackRouteCoords.length >= 2) ? fallbackRouteCoords : staticHighwayCoords);
 
   const routeCoordinates = activeRoadCoords;
-  const currentStops = CORRIDOR_STOPS[direction] || CORRIDOR_STOPS.SEHORE_TO_VIT;
+  const currentStops = (canonicalCorridor?.directions?.[direction])
+    ? canonicalCorridor.directions[direction].map((wp, idx, arr) => ({
+        stop_id: wp.stop_id,
+        name: wp.name,
+        coords: [wp.lat, wp.lng],
+        type: idx === 0 ? 'origin' : (idx === arr.length - 1 ? 'destination' : 'intermediate')
+      }))
+    : (CORRIDOR_STOPS[direction] || CORRIDOR_STOPS.SEHORE_TO_VIT);
 
   const [animatedTripCoords, setAnimatedTripCoords] = useState(null);
   const animFrameRef = useRef(null);
