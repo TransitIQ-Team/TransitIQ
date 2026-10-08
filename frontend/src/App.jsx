@@ -10,6 +10,8 @@ import ConductorPage from './pages/ConductorPage';
 import SimulatorPage from './pages/SimulatorPage';
 import LoginPage from './pages/LoginPage';
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://transitiq-backend-1icp.onrender.com';
+
 const ROLE_CONFIG = {
   Passenger: {
     landing: 'home',
@@ -55,7 +57,7 @@ export default function App() {
 
   useEffect(() => {
     // Socket.IO passenger connection listener
-    const socket = io('http://localhost:5000', {
+    const socket = io(API_URL, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       timeout: 3000
