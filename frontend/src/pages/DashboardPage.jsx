@@ -823,30 +823,111 @@ export default function DashboardPage({ latestEvent }) {
             )}
           </div>
 
-          {/* Upcoming Stop Progression */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+          {/* Phase 3: Stop-by-Stop Corridor Arrival Schedule & Progress Timeline */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Corridor Stop Sequence</span>
-              <span className="text-[11px] text-slate-400 font-medium">{currentStops.length} Stops</span>
+              <div>
+                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">Corridor Arrival Timeline</span>
+                <span className="text-[10px] text-slate-400 font-medium">Real-Time Progress & Per-Stop ETAs</span>
+              </div>
+              <span className="text-[11px] font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                {currentStops.length} Stops
+              </span>
             </div>
 
-            <div className="relative pl-6 space-y-3 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-teal-200">
+            <div className="relative pl-7 space-y-4 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-teal-200">
               {currentStops.map((stop, idx) => {
-                const isOrigin = idx === 0;
-                const isDest = idx === currentStops.length - 1;
+                const stopEta = (etaData?.stops_eta && Array.isArray(etaData.stops_eta))
+                  ? etaData.stops_eta.find(s => s.name === stop.name || s.stop_id === stop.stop_id) || etaData.stops_eta[idx]
+                  : null;
+
+                const status = stopEta?.status || (activeServiceState === 'SCHEDULED' ? (idx === 0 ? 'NEXT' : 'UPCOMING') : (idx === 0 ? 'NEXT' : 'UPCOMING'));
+                const isPassed = status === 'PASSED';
+                const isNext = status === 'NEXT';
+                const isUpcoming = status === 'UPCOMING';
+
                 return (
-                  <div key={stop.name} className="relative flex items-center justify-between text-xs">
+                  <div key={stop.name || idx} className="relative flex items-start justify-between text-xs group">
+                    {/* Timeline Node Dot */}
                     <span
-                      className={`absolute -left-6 w-3 h-3 rounded-full border-2 border-white shadow-sm ${
-                        isOrigin ? 'bg-teal-600' : isDest ? 'bg-orange-500' : 'bg-teal-400'
+                      className={`absolute -left-7 top-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold transition-all shadow-sm ${
+                        isPassed
+                          ? 'bg-emerald-500 text-white ring-2 ring-emerald-100'
+                          : isNext
+                          ? 'bg-teal-600 text-white ring-4 ring-teal-100 animate-pulse'
+                          : 'bg-white border-2 border-slate-300 text-slate-400'
                       }`}
-                    ></span>
-                    <span className={`font-semibold ${isOrigin || isDest ? 'text-slate-900 font-bold' : 'text-slate-700'}`}>
-                      {stop.name}
+                    >
+                      {isPassed ? '✓' : isNext ? '●' : '○'}
                     </span>
-                    <span className="text-[10px] text-slate-400 font-medium">
-                      {isOrigin ? 'Origin' : isDest ? 'Target' : 'Stop'}
-                    </span>
+
+                    {/* Stop Details */}
+                    <div className="flex-1 min-w-0 pr-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`font-bold text-xs truncate ${isPassed ? 'text-slate-500 line-through' : isNext ? 'text-teal-900 font-extrabold' : 'text-slate-800'}`}>
+                          {stop.name}
+                        </span>
+                        {stop.stop_id && (
+                          <span className="text-[9px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                            {stop.stop_id}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Status & Explanation Line */}
+                      <div className="text-[10px] text-slate-500 mt-0.5 flex flex-wrap items-center gap-1.5">
+                        {isPassed && (
+                          <span className="text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold border border-emerald-200">
+                            PASSED
+                          </span>
+                        )}
+                        {isNext && (
+                          <span className="text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded font-bold border border-teal-300">
+                            NEXT STOP
+                          </span>
+                        )}
+                        {isUpcoming && (
+                          <span className="text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded font-medium border border-slate-200">
+                            UPCOMING
+                          </span>
+                        )}
+                        {stopEta?.explanation && (
+                          <span className="text-slate-400 truncate max-w-[160px]" title={stopEta.explanation}>
+                            • {stopEta.explanation}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* ETA Prediction Output */}
+                    <div className="text-right shrink-0">
+                      {isPassed ? (
+                        <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">
+                          Passed
+                        </span>
+                      ) : activeServiceState === 'SCHEDULED' ? (
+                        <div className="text-right">
+                          <span className="text-xs font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 block">
+                            Scheduled
+                          </span>
+                        </div>
+                      ) : stopEta && stopEta.eta_minutes !== null ? (
+                        <div className="text-right">
+                          <div className="text-xs font-extrabold text-slate-900">
+                            {stopEta.eta_minutes} <span className="text-[10px] font-bold text-teal-600">min</span>
+                          </div>
+                          {stopEta.eta_range && (
+                            <div className="text-[10px] text-slate-400 font-medium">
+                              {stopEta.eta_range}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] font-medium text-slate-400">
+                          --
+                        </span>
+                      )}
+                    </div>
                   </div>
                 );
               })}

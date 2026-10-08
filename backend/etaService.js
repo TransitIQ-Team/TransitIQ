@@ -543,4 +543,96 @@ export async function fetchMlComparisonMetrics() {
   };
 }
 
+// Compute batch stop-by-stop ETAs for entire corridor direction
+export async function computeCorridorStopsEta({ routeId = 'SH-VIT-01', storedTrip, signalStatus, direction = 'SEHORE_TO_VIT', mode = 'hybrid', timeOfDayBucket, dayOfWeek }) {
+  const waypoints = PILOT_WAYPOINTS[direction] || PILOT_WAYPOINTS.SEHORE_TO_VIT;
+  const corridorData = getPilotCorridorData();
+  const canonicalDirectionStops = corridorData?.directions?.[direction] || waypoints;
+
+  let nearestIndex = 0;
+  if (storedTrip && typeof storedTrip.latitude === 'number' && typeof storedTrip.longitude === 'number') {
+    const matched = matchNearestSegment(storedTrip.latitude, storedTrip.longitude, direction);
+    nearestIndex = matched.nearestWaypointIndex;
+  }
+
+  const serviceState = signalStatus?.service_state || 'SCHEDULED';
+
+  const stopsEta = await Promise.all(waypoints.map(async (wp, idx) => {
+    const canonicalStop = canonicalDirectionStops[idx] || wp;
+    const stopId = canonicalStop.stop_id || `STOP-00${idx + 1}`;
+    const stopName = wp.name;
+
+    let status = 'UPCOMING';
+    if (serviceState === 'COMPLETED') {
+      status = 'PASSED';
+    } else if (serviceState === 'CANCELLED') {
+      status = 'CANCELLED';
+    } else if (serviceState === 'SCHEDULED') {
+      status = idx === 0 ? 'NEXT' : 'UPCOMING';
+    } else {
+      if (idx < nearestIndex) {
+        status = 'PASSED';
+      } else if (idx === nearestIndex) {
+        status = 'NEXT';
+      } else {
+        status = 'UPCOMING';
+      }
+    }
+
+    if (status === 'PASSED') {
+      return {
+        stop_id: stopId,
+        name: stopName,
+        status,
+        eta_minutes: 0,
+        eta_range: '0 min',
+        minMinutes: 0,
+        maxMinutes: 0,
+        confidence_level: 'High',
+        source: 'passed_stop',
+        explanation: 'Stop already passed'
+      };
+    }
+
+    let singleEta;
+    if (mode === 'hybrid') {
+      singleEta = await computeHybridEta({ routeId, storedTrip, signalStatus, direction, targetStop: stopName, timeOfDayBucket, dayOfWeek });
+    } else if (mode === 'ml') {
+      singleEta = await computeSignalAwareEtaWithMl({ routeId, storedTrip, signalStatus, direction, targetStop: stopName, useMl: true, timeOfDayBucket, dayOfWeek });
+    } else {
+      singleEta = computeSignalAwareEta({ routeId, storedTrip, signalStatus, direction, targetStop: stopName, timeOfDayBucket, dayOfWeek });
+    }
+
+    if (serviceState === 'SCHEDULED') {
+      return {
+        stop_id: stopId,
+        name: stopName,
+        status,
+        eta_minutes: null,
+        eta_range: null,
+        minMinutes: null,
+        maxMinutes: null,
+        confidence_level: null,
+        source: 'timetable_schedule',
+        explanation: 'Scheduled timetable entry (live tracking starts when vehicle departs)'
+      };
+    }
+
+    return {
+      stop_id: stopId,
+      name: stopName,
+      status,
+      eta_minutes: singleEta.eta_minutes,
+      eta_range: singleEta.eta_range,
+      minMinutes: singleEta.minMinutes ?? singleEta.lower_minutes,
+      maxMinutes: singleEta.maxMinutes ?? singleEta.upper_minutes,
+      confidence_level: singleEta.confidence_level || 'Medium',
+      source: singleEta.source,
+      explanation: singleEta.explanation
+    };
+  }));
+
+  return stopsEta;
+}
+
 
