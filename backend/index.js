@@ -5,7 +5,7 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics, getOSRMRoute, matchCoordinatesToRoad, PILOT_WAYPOINTS, getPilotCorridorData } from './etaService.js';
+import { computeSignalAwareEta, computeSignalAwareEtaWithMl, computeHybridEta, fetchMlComparisonMetrics, getOSRMRoute, matchCoordinatesToRoad, PILOT_WAYPOINTS, getPilotCorridorData, computeCorridorStopsEta } from './etaService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -271,6 +271,13 @@ app.get('/api/trips/:id/eta', async (req, res) => {
     };
   }
 
+  const stopsEta = await computeCorridorStopsEta({
+    storedTrip,
+    signalStatus,
+    direction,
+    mode
+  });
+
   return res.status(200).json({
     trip_id,
     service_state: signalStatus.service_state,
@@ -278,6 +285,7 @@ app.get('/api/trips/:id/eta', async (req, res) => {
     scheduled_departure: signalStatus.scheduled_departure,
     baseline_duration: signalStatus.baseline_duration,
     ...etaResult,
+    stops_eta: stopsEta,
     geometry: corridor.geometry,
     routeCoordinates: corridor.routeCoordinates
   });
