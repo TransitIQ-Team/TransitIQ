@@ -88,6 +88,7 @@ export default function DashboardPage({ latestEvent }) {
   const [liveDataState, setLiveDataState] = useState(null);
   const [liveServiceState, setLiveServiceState] = useState(null);
   const [liveTelemetryState, setLiveTelemetryState] = useState(null);
+  const [telemetrySource, setTelemetrySource] = useState(null);
   const [passengerCoords, setPassengerCoords] = useState(null);
   const [locationStatus, setLocationStatus] = useState('NOT_REQUESTED');
   const [locationErrorMessage, setLocationErrorMessage] = useState('');
@@ -154,6 +155,7 @@ export default function DashboardPage({ latestEvent }) {
         if (status.data_state) setLiveDataState(status.data_state);
         if (status.service_state) setLiveServiceState(status.service_state);
         if (status.telemetry_state) setLiveTelemetryState(status.telemetry_state);
+        if (status.source) setTelemetrySource(status.source);
       }
     });
 
@@ -162,6 +164,7 @@ export default function DashboardPage({ latestEvent }) {
         if (data.data_state) setLiveDataState(data.data_state);
         if (data.service_state) setLiveServiceState(data.service_state);
         if (data.telemetry_state) setLiveTelemetryState(data.telemetry_state);
+        if (data.source) setTelemetrySource(data.source);
       }
       const tripCoordinates = (data?.latitude != null && data?.longitude != null)
         ? [data.latitude, data.longitude]
@@ -212,6 +215,7 @@ export default function DashboardPage({ latestEvent }) {
     if (latestEvent.data_state) setLiveDataState(latestEvent.data_state);
     if (latestEvent.service_state) setLiveServiceState(latestEvent.service_state);
     if (latestEvent.telemetry_state) setLiveTelemetryState(latestEvent.telemetry_state);
+    if (latestEvent.source) setTelemetrySource(latestEvent.source);
 
     const tripCoordinates = (latestEvent?.latitude != null && latestEvent?.longitude != null)
       ? [latestEvent.latitude, latestEvent.longitude]
@@ -557,8 +561,13 @@ export default function DashboardPage({ latestEvent }) {
     };
   }, [direction]);
 
+  const activeTelemetrySource = telemetrySource || etaData?.source || etaData?.tripData?.source || etaData?.trip?.source || null;
+  const displayedBusPosition = activeTelemetrySource === 'conductor'
+    ? tripCoordinates
+    : (animatedTripCoords || tripCoordinates);
+
   // Current bus coordinate for passenger distance calculation (only when active/en route and valid position exists)
-  const currentBusPositionForDistance = activeServiceState === 'ACTIVE' ? (animatedTripCoords || tripCoordinates) : null;
+  const currentBusPositionForDistance = activeServiceState === 'ACTIVE' ? (displayedBusPosition || tripCoordinates) : null;
   let passengerDistanceText = null;
 
   if (passengerCoords && Array.isArray(passengerCoords) && currentBusPositionForDistance && Array.isArray(currentBusPositionForDistance) && currentBusPositionForDistance.length >= 2) {
@@ -868,15 +877,17 @@ export default function DashboardPage({ latestEvent }) {
                   </CircleMarker>
                 ))}
 
-                {/* Animated Bus Location Marker (only when position is known) */}
-                {Array.isArray(animatedTripCoords || tripCoordinates) && activeServiceState === 'ACTIVE' && (
+                {/* Bus Location Marker: Raw device GPS for Driver Mode (conductor), interpolated road position for Simulator */}
+                {Array.isArray(displayedBusPosition) && activeServiceState === 'ACTIVE' && (
                   <Marker
-                    position={animatedTripCoords || tripCoordinates}
+                    position={displayedBusPosition}
                     icon={busMarkerIcon}
                   >
                     <Popup>
                       <div className="text-xs">
-                        <div className="font-bold text-teal-700">TransitIQ Bus (TRIP-101)</div>
+                        <div className="font-bold text-teal-700">
+                          {activeTelemetrySource === 'conductor' ? 'TransitIQ Bus (Real Driver GPS)' : 'TransitIQ Bus (TRIP-101)'}
+                        </div>
                         <div className="text-slate-600 mt-0.5">Service: {serviceBadge.shortLabel}</div>
                         <div className="text-slate-600">Tracking: {trackingBadge.shortLabel}</div>
                       </div>
