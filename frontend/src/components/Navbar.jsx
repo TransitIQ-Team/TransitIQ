@@ -7,7 +7,7 @@ const ALL_NAV_ITEMS = [
   { id: 'routes', label: 'Routes', icon: MapPin },
   { id: 'insights', label: 'Insights', icon: Cpu },
   { id: 'conductor', label: 'Driver Mode', icon: Navigation },
-  { id: 'simulator', label: 'Try Demo', icon: Cpu },
+  { id: 'simulator', label: 'Simulator', icon: Cpu },
   { id: 'about', label: 'About', icon: BookOpen },
 ];
 
@@ -123,7 +123,7 @@ export default function Navbar({ activeTab, setActiveTab, socketConnected, lates
               }`}
             >
               <LogIn className="w-3.5 h-3.5" />
-              <span>Demo Login</span>
+              <span>Sign In</span>
             </button>
           )}
         </div>

@@ -70,17 +70,17 @@ export default function LoginPage({ onLoginSuccess }) {
             <Bus className="w-6 h-6 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-            Transit<span className="text-teal-600">IQ</span> Exhibition Demo
+            Transit<span className="text-teal-600">IQ</span> Portal Sign In
           </h1>
           <p className="text-xs text-slate-500">
-            Select a demo role or enter credentials to sign in
+            Choose your role or enter your credentials to sign in
           </p>
         </div>
 
         {/* Quick Fill Demo Roles */}
         <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
           <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-            Exhibition Demo Quick Select
+            Quick Role Login
           </span>
           <div className="grid grid-cols-3 gap-2">
             {DEMO_ACCOUNTS.map((acc) => (
@@ -148,13 +148,13 @@ export default function LoginPage({ onLoginSuccess }) {
             type="submit"
             className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all flex items-center justify-center gap-2"
           >
-            Sign In to Demo
+            Sign In
           </button>
         </form>
 
         {/* Demo Credentials Reference Box */}
         <div className="pt-2 border-t border-slate-100">
-          <p className="text-[11px] font-semibold text-slate-600 mb-2">Available Demo Accounts:</p>
+          <p className="text-[11px] font-semibold text-slate-600 mb-2">Available Test Accounts:</p>
           <div className="space-y-1.5 text-[11px]">
             {DEMO_ACCOUNTS.map((acc) => (
               <div key={acc.email} className="flex justify-between items-center text-slate-500 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-100">
