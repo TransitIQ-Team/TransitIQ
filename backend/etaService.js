@@ -20,8 +20,22 @@ export function getDestinationCoords(direction) {
 
 
 
-// Waypoint definitions for pilot routes
-export const PILOT_WAYPOINTS = {
+const CORRIDOR_DATA_PATH = path.join(__dirname, 'data', 'pilotCorridor.json');
+
+export function getPilotCorridorData() {
+  try {
+    const raw = fs.readFileSync(CORRIDOR_DATA_PATH, 'utf-8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Error reading pilotCorridor.json:', err);
+    return null;
+  }
+}
+
+const _corridorData = getPilotCorridorData();
+
+// Canonical Waypoint definitions for pilot routes derived from pilotCorridor.json
+export const PILOT_WAYPOINTS = _corridorData?.directions || {
   SEHORE_TO_VIT: [
     { name: "Sehore Bus Stand", lat: 23.200078, lng: 77.087906 },
     { name: "Kubreshwar Dham", lat: 23.164298, lng: 77.005836 },
